@@ -51,6 +51,14 @@ type Account struct {
 	CheckinOutcome string `json:"checkinOutcome,omitempty"`
 	CheckinCredit  int    `json:"checkinCredit,omitempty"`
 	CheckinStreak  int    `json:"checkinStreak,omitempty"`
+	// 任务中心记录（WorkBuddy 任务自动化使用）。
+	// LastTaskRun 是最近一次跑全套的时间（Unix 秒）；TasksRun 是那次的全套结果，
+	// 键为任务名（report/checkin/streak/claim-gift/compensation/makeup/buddy/
+	// travel-depart/travel-claim/lottery），值为 ok/already/skipped/locked/failed。
+	LastTaskRun int64             `json:"lastTaskRun,omitempty"`
+	TasksRun    map[string]string `json:"tasksRun,omitempty"`
+	// TaskOutcomeDetail 保存每项任务最近一次的说明文字（上游 msg 或本地判定）。
+	TaskOutcomeDetail map[string]string `json:"taskOutcomeDetail,omitempty"`
 	// 设备身份（Trae 这类要求设备证明的供应商使用）
 	DeviceID   string `json:"deviceId,omitempty"`
 	MachineID  string `json:"machineId,omitempty"`
@@ -109,12 +117,40 @@ type Routing struct {
 	BareModelFallback bool `json:"bareModelFallback"`
 }
 
+// PromptConfig 是系统提示词注入配置。
+//
+//	mode=passthrough  原样转发（默认）
+//	mode=inject       在客户端提示词前面插一段（压过它）
+//	mode=replace      丢掉客户端自带的，只用自己的
+type PromptConfig struct {
+	Mode   string `json:"mode,omitempty"`
+	File   string `json:"file,omitempty"`
+	Inline string `json:"inline,omitempty"`
+}
+
+// APIKey 是发给客户端的调用凭据（可与主网关口令并存）。
+type APIKey struct {
+	ID        string `json:"id"`
+	Note      string `json:"note,omitempty"`
+	Key       string `json:"key"`
+	Enabled   *bool  `json:"enabled,omitempty"`
+	CreatedAt int64  `json:"createdAt,omitempty"`
+}
+
+// IsEnabled 默认启用。
+func (k *APIKey) IsEnabled() bool {
+	return k == nil || k.Enabled == nil || *k.Enabled
+}
+
 // Config 是完整配置。
 type Config struct {
 	Server    Server      `json:"server"`
 	Providers []*Provider `json:"providers"`
 	Groups    []*Group    `json:"groups,omitempty"`
+	APIKeys   []*APIKey   `json:"apiKeys,omitempty"`
 	Routing   Routing     `json:"routing"`
+	// Prompt 是网关级系统提示词注入配置（压过客户端自带的 system）
+	Prompt PromptConfig `json:"prompt,omitempty"`
 	// Setup 记录是否完成首次向导，供面板判断。
 	Setup struct {
 		Done   bool  `json:"done"`

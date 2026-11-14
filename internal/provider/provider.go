@@ -28,6 +28,7 @@ import (
 	"allin/internal/provider/qoder"
 	"allin/internal/provider/raccoon"
 	"allin/internal/provider/trae"
+	"allin/internal/provider/workbuddy"
 	"allin/internal/provider/wenxin"
 )
 
@@ -93,6 +94,35 @@ func init() {
 		pool = x509.NewCertPool()
 	}
 	pool.AppendCertsFromPEM(caBundle)
+
+	// 所有供应商包共用同一份带内置 CA 的 Transport。
+	// 静态二进制在 Android 上找不到系统根证书（证书在 /system/etc/security/cacerts，
+	// 而 Go 只认 /etc/ssl/certs），不统一注入就会全员 x509 失败。
+	sharedTransport := &http.Transport{
+		Proxy:                 nil,
+		MaxIdleConns:          64,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ExpectContinueTimeout: 3 * time.Second,
+		ForceAttemptHTTP2:     true,
+		TLSClientConfig:       &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+	}
+	trae.HTTPClient.Transport = sharedTransport
+	copilot.HTTPClient.Transport = sharedTransport
+	codex.HTTPClient.Transport = sharedTransport
+	deepseekweb.HTTPClient.Transport = sharedTransport
+	raccoon.HTTPClient.Transport = sharedTransport
+	loomy.HTTPClient.Transport = sharedTransport
+	qoder.HTTPClient.Transport = sharedTransport
+	cline.HTTPClient.Transport = sharedTransport
+	minimax.HTTPClient.Transport = sharedTransport
+	catpaw.HTTPClient.Transport = sharedTransport
+	workbuddy.HTTPClient.Transport = sharedTransport
+	// antigravity 必须禁 HTTP/2（cloudcode-pa 协商到 h2 会被 reset），单独一份
+	agTransport := sharedTransport.Clone()
+	agTransport.ForceAttemptHTTP2 = false
+	antigravity.HTTPClient = &http.Client{Transport: agTransport, Timeout: antigravity.HTTPClient.Timeout}
 	if tr, ok := HTTPClient.Transport.(*http.Transport); ok {
 		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 		// 妙手 / 文心这两个包各自持有一个裸 &http.Client{}：在 Android 上它只认

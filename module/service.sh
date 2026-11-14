@@ -19,7 +19,10 @@ LOG="$MODDIR/allin.log"
 GWLOG="$MODDIR/gateway.log"
 RUNLOG="$RUNDIR/gateway.log"
 PORT=3425
-API="http://127.0.0.1:$PORT/api/workbuddy/checkin"
+# 任务中心接口：POST 跑全套（活跃上报→签到→连登兑换→领礼包→领补偿→补签→
+# 猫猫旅行→抽奖）；只读汇总在 $API_STATUS，出问题时先打它看现场。
+API="http://127.0.0.1:$PORT/api/workbuddy/tasks"
+API_STATUS="http://127.0.0.1:$PORT/api/workbuddy/tasks/status"
 RUNAS=2000
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
@@ -114,11 +117,19 @@ fi
         if { [ "$H" = "09" ] || [ "$H" = "21" ]; } && [ "$last" != "$slot" ]; then
             K=$(sed -n 's/.*"authKey"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$RUNDATA/config.json" 2>/dev/null | head -1)
             if [ -n "$K" ]; then
-                curl -s -m 120 -o /dev/null -X POST "$API" \
+                # 全套任务：一次请求跑完 report/checkin/streak/gift/comp/travel/lottery。
+                # 每账号最多 3 分钟，账号多时整体会久一点，故 -m 给到 300。
+                # 返回体落一行摘要进日志，方便事后核对谁成功谁跳过。
+                RESP=$(curl -s -m 300 -X POST "$API" \
                     -H "Authorization: Bearer $K" \
-                    -H 'Content-Type: application/json' -d '{}' 2>/dev/null
-                log "workbuddy checkin slot=$slot"
+                    -H 'Content-Type: application/json' -d '{}' 2>/dev/null)
+                case "$RESP" in
+                    *'"ok"'*) log "workbuddy tasks slot=$slot ok" ;;
+                    *)        log "workbuddy tasks slot=$slot 返回异常: $(echo "$RESP" | cut -c1-200)" ;;
+                esac
                 sync_back
+            else
+                log "workbuddy tasks slot=$slot 跳过：配置里读不到 authKey"
             fi
             last="$slot"
         fi

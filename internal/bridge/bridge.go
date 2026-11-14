@@ -293,11 +293,12 @@ func AnthropicToOpenAIResponse(in []byte, model string) ([]byte, error) {
 	var src struct {
 		ID      string `json:"id"`
 		Content []struct {
-			Type  string          `json:"type"`
-			Text  string          `json:"text"`
-			ID    string          `json:"id"`
-			Name  string          `json:"name"`
-			Input json.RawMessage `json:"input"`
+			Type     string          `json:"type"`
+			Text     string          `json:"text"`
+			Thinking string          `json:"thinking"` // Anthropic 思考块
+			ID       string          `json:"id"`
+			Name     string          `json:"name"`
+			Input    json.RawMessage `json:"input"`
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      struct {
@@ -310,11 +311,17 @@ func AnthropicToOpenAIResponse(in []byte, model string) ([]byte, error) {
 	}
 
 	var text strings.Builder
+	var reasoning strings.Builder
 	var toolCalls []map[string]any
 	for _, c := range src.Content {
 		switch c.Type {
 		case "text":
 			text.WriteString(c.Text)
+		case "thinking":
+			// Anthropic 的思考块 → OpenAI 客户端的 reasoning_content
+			reasoning.WriteString(c.Thinking)
+		case "redacted_thinking":
+			// 加密块无法解码，跳过
 		case "tool_use":
 			args := "{}"
 			if len(c.Input) > 0 {
@@ -336,6 +343,9 @@ func AnthropicToOpenAIResponse(in []byte, model string) ([]byte, error) {
 	}
 
 	msg := map[string]any{"role": "assistant", "content": text.String()}
+	if rc := reasoning.String(); rc != "" {
+		msg["reasoning_content"] = rc
+	}
 	if len(toolCalls) > 0 {
 		msg["tool_calls"] = toolCalls
 	}

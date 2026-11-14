@@ -64,6 +64,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if incoming.Server.Host == "" {
 			incoming.Server.Host = cur.Server.Host
 		}
+		// 供应商/账号的密钥同样要防"掩码写回"：面板拿到的是脱敏视图，
+		// 用户只改端口时会把整份视图原样回传，这里把掩码值还原成真实值。
+		mergeMaskedSecrets(cur, &incoming)
 		if err := s.store.Save(&incoming); err != nil {
 			s.fail(w, http.StatusInternalServerError, "保存失败: "+err.Error())
 			return
@@ -274,6 +277,56 @@ func (s *Server) doCheckin(origin string, a *config.Account) (credit, streak int
 
 func today() string {
 	return time.Now().Format("2006-01-02")
+}
+
+// mergeMaskedSecrets 把 incoming 中被掩码（或留空）的敏感字段还原成 cur 里的真实值。
+//
+// 背景：GET /api/config 返回的是脱敏视图（apiKey / access / refresh 变成 "abc123...wxyz"），
+// 而 Store.Save 是整份替换。面板在「设置」里只改端口/口令时会把整份视图回传，
+// 若不还原，密钥就会被写成掩码串，等于把凭据弄坏。留空同样按"不修改"处理，
+// 与 Server.AuthKey 的既有语义保持一致。
+func mergeMaskedSecrets(cur, incoming *config.Config) {
+	if incoming == nil || cur == nil {
+		return
+	}
+	for _, p := range incoming.Providers {
+		if p == nil {
+			continue
+		}
+		old := cur.FindProvider(p.ID)
+		if old == nil {
+			continue
+		}
+		if maskedOrEmpty(p.APIKey) {
+			p.APIKey = old.APIKey
+		}
+		for _, a := range p.Accounts {
+			if a == nil {
+				continue
+			}
+			var oa *config.Account
+			for _, x := range old.Accounts {
+				if x != nil && x.ID == a.ID {
+					oa = x
+					break
+				}
+			}
+			if oa == nil {
+				continue
+			}
+			if maskedOrEmpty(a.Access) {
+				a.Access = oa.Access
+			}
+			if maskedOrEmpty(a.Refresh) {
+				a.Refresh = oa.Refresh
+			}
+		}
+	}
+}
+
+// maskedOrEmpty 判断一个字段值是不是"脱敏串或空"，这两种都表示调用方没打算改它。
+func maskedOrEmpty(v string) bool {
+	return v == "" || strings.Contains(v, "...")
 }
 
 // handleAccounts 导出账号池的健康状态（成功数、失败数、冷却剩余）。

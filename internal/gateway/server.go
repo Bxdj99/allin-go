@@ -15,6 +15,7 @@ import (
 
 	"allin/internal/bridge"
 	"allin/internal/config"
+	"allin/internal/prompt"
 	"allin/internal/provider"
 	"allin/internal/provider/codex"
 	"allin/internal/provider/qoder"
@@ -60,12 +61,31 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/config", s.withAuth(s.handleConfig))
 	s.mux.HandleFunc("/api/models", s.withAuth(s.handleModels))
 	s.mux.HandleFunc("/api/accounts", s.withAuth(s.handleAccounts))
+	s.mux.HandleFunc("/api/providers", s.withAuth(s.handleProvidersOrWrite))
+	s.mux.HandleFunc("/api/providers/write", s.withAuth(s.handleProviderWrite))
+	s.mux.HandleFunc("/api/accounts/write", s.withAuth(s.handleAccountWrite))
+	s.mux.HandleFunc("/api/prompt", s.withAuth(s.handlePrompt))
+	s.mux.HandleFunc("/api/prompt/preset", s.withAuth(s.handlePromptPreset))
+	s.mux.HandleFunc("/api/keys", s.withAuth(s.handleKeys))
+	s.mux.HandleFunc("/api/keys/toggle", s.withAuth(s.handleKeyToggle))
+	s.mux.HandleFunc("/api/usage", s.withAuth(s.handleUsage))
+	s.mux.HandleFunc("/api/usage/reset", s.withAuth(s.handleUsageReset))
+	s.mux.HandleFunc("/api/auth/workbuddy/start", s.withAuth(s.handleWorkBuddyStart))
+	s.mux.HandleFunc("/api/auth/workbuddy/poll", s.withAuth(s.handleWorkBuddyPoll))
 	s.mux.HandleFunc("/api/auth/github-copilot/start", s.withAuth(s.handleCopilotStart))
 	s.mux.HandleFunc("/api/auth/github-copilot/poll", s.withAuth(s.handleCopilotPoll))
 	s.mux.HandleFunc("/api/auth/trae/start", s.withAuth(s.handleTraeStart))
 	s.mux.HandleFunc("/api/auth/trae/poll", s.withAuth(s.handleTraePoll))
+	// 第二批供应商登录：antigravity catpaw cline codex minimax qoder raccoon wenxin
+	// 统一走 /api/auth/<vendor>/start 与 /api/auth/<vendor>/poll（见 provider_auth.go）。
+	// 上面三条精确路径优先匹配，这里只兜住其余子路径。
+	s.mux.HandleFunc("/api/auth/", s.withAuth(s.handleProviderAuth))
 	s.mux.HandleFunc("/api/workbuddy/checkin", s.withAuth(s.handleWorkBuddyCheckin))
 	s.mux.HandleFunc("/api/workbuddy/checkin-status", s.withAuth(s.handleWorkBuddyCheckin))
+	// 任务中心：POST 跑全套（report→checkin→streak→claim-gift→compensation→
+	// makeup→buddy→travel→lottery），GET 只读汇总。
+	s.mux.HandleFunc("/api/workbuddy/tasks", s.withAuth(s.handleWorkBuddyTasks))
+	s.mux.HandleFunc("/api/workbuddy/tasks/status", s.withAuth(s.handleWorkBuddyTaskStatus))
 
 	// 面板
 	s.mux.HandleFunc("/", s.handleIndex)
@@ -80,8 +100,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cfg := s.store.Snapshot()
-		want := cfg.Server.AuthKey
-		if want == "" {
+		if cfg.Server.AuthKey == "" && len(cfg.APIKeys) == 0 {
 			next(w, r)
 			return
 		}
@@ -89,7 +108,7 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		if got == "" {
 			got = r.URL.Query().Get("key")
 		}
-		if got != want {
+		if !keyAllowed(cfg, got) {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{
 				"error": "需要网关口令",
 				"hint":  "请求头带 Authorization: Bearer <authKey>，或在 URL 加 ?key=<authKey>",
@@ -210,6 +229,15 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	// 客户端协议与上游协议不一致时做转换
 	needBridge := proto != upstreamProto
 	upstreamBody := body
+	// 跨协议时路径必须跟着上游协议走，否则会打到不存在的端点
+	// （Anthropic 客户端 /v1/messages → OpenAI 上游，仍拼 /messages 就是 404）
+	if needBridge {
+		if upstreamProto == protocolAnthropic {
+			apiPath = "/messages"
+		} else {
+			apiPath = "/chat/completions"
+		}
+	}
 	if needBridge {
 		if head.Stream {
 			s.fail(w, http.StatusBadRequest,
@@ -261,6 +289,21 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		} else {
 			log.Printf("Codex 请求转换失败: %v", cerr)
 		}
+	}
+
+	// 系统提示词注入：网关层强制，客户端改不掉
+	if ptext, perr := loadPromptText(cfg); perr == nil && ptext != "" {
+		if upstreamProto == protocolAnthropic {
+			if nb, aerr := prompt.ApplyAnthropic(upstreamBody, ptext, cfg.Prompt.Mode); aerr == nil {
+				upstreamBody = nb
+			}
+		} else {
+			if nb, aerr := prompt.ApplyOpenAI(upstreamBody, ptext, cfg.Prompt.Mode); aerr == nil {
+				upstreamBody = nb
+			}
+		}
+	} else if perr != nil {
+		log.Printf("提示词注入失败（按原样发送）: %v", perr)
 	}
 
 	base := p.BaseURL
@@ -337,17 +380,29 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 			s.relayTrae(w, resp, head.Stream, needBridge, proto, realModel, traeTools)
 			return
 		}
-		// WorkBuddy 上游一定是流式；客户端要非流式就在这里聚合
-		if kind == provider.KindWorkBuddy && !head.Stream && !needBridge {
-			out, aerr := workbuddy.Aggregate(resp.Body, realModel)
+		// WorkBuddy 上游一定是流式。客户端要非流式时先聚合，
+		// 需要跨协议时再拿聚合结果去转换（这里容易踩：先转协议会把 SSE 当 JSON 解析）
+		if kind == provider.KindWorkBuddy && !head.Stream {
+			aggregated, aerr := workbuddy.Aggregate(resp.Body, realModel)
 			resp.Body.Close()
 			if aerr != nil {
 				s.fail(w, http.StatusBadGateway, "WorkBuddy 响应聚合失败: "+aerr.Error())
 				return
 			}
+			if needBridge && proto == protocolAnthropic {
+				converted, cerr := bridge.OpenAIToAnthropic(aggregated, realModel)
+				if cerr != nil {
+					s.fail(w, http.StatusBadGateway, "响应协议转换失败: "+cerr.Error())
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(converted)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(out)
+			_, _ = w.Write(aggregated)
 			return
 		}
 		s.relay(w, resp, head.Stream, needBridge, proto, realModel)
@@ -383,6 +438,9 @@ func (s *Server) relay(w http.ResponseWriter, resp *http.Response, stream, needB
 		return
 	}
 	if !needBridge {
+		// 顺手抽 usage 记进统计表（拿不到就记 0）
+		inTok, outTok := extractUsage(raw)
+		recordUsage(resp.Request.URL.Host, model, resp.StatusCode < 400, inTok, outTok)
 		ct := resp.Header.Get("Content-Type")
 		if ct == "" {
 			ct = "application/json"
@@ -641,6 +699,30 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func decodeJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(v)
+}
+
+// extractUsage 从响应体里抽 prompt_tokens / completion_tokens。
+func extractUsage(raw []byte) (int, int) {
+	var env struct {
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			InputTokens      int `json:"input_tokens"`
+			OutputTokens     int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(raw, &env) != nil {
+		return 0, 0
+	}
+	in := env.Usage.PromptTokens
+	if in == 0 {
+		in = env.Usage.InputTokens
+	}
+	out := env.Usage.CompletionTokens
+	if out == 0 {
+		out = env.Usage.OutputTokens
+	}
+	return in, out
 }
 
 func truncate(s string, n int) string {

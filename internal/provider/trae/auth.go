@@ -15,6 +15,10 @@ import (
 	"time"
 )
 
+// HTTPClient 是 Trae 认证与 API 请求共用的客户端。
+// 注意：Transport 由 provider 包在 init 时注入（带内置 CA），否则 Android 上会 x509 失败。
+var HTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 // Flow 是一次进行中的登录（对应 All-in 的 TraeControl 登录流）。
 type Flow struct {
 	FlowID   string
@@ -287,8 +291,7 @@ func exchangeOnce(ident *Identity, refresh, clientID, platform, version string) 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Trae CN/"+version+" (Windows 10; AMD)")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求失败: %w", err)
 	}

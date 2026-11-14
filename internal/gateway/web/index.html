@@ -2,148 +2,1818 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>All In - AI 网关</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>All In · AI 网关面板</title>
+<link rel="icon" href="data:,">
 <style>
-  :root { color-scheme: dark; --bg:#0d1117; --card:#161b22; --line:#30363d; --text:#e6edf3; --dim:#8b949e; --accent:#58a6ff; --ok:#3fb950; --warn:#d29922; --err:#f85149; }
-  * { box-sizing: border-box; }
-  body { margin:0; padding:16px; background:var(--bg); color:var(--text); font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
-  h1 { font-size:18px; margin:0 0 4px; }
-  .sub { color:var(--dim); font-size:12px; margin-bottom:16px; }
+  /* ==================== 主题变量（沿用深色风格） ==================== */
+  :root {
+    color-scheme: dark;
+    --bg:#0d1117; --card:#161b22; --line:#30363d; --text:#e6edf3; --dim:#8b949e;
+    --accent:#58a6ff; --ok:#3fb950; --warn:#d29922; --err:#f85149; --inner:#0b0f14;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; }
+  body {
+    background:var(--bg); color:var(--text);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    padding:0 12px calc(76px + env(safe-area-inset-bottom)); /* 底部给导航留位 */
+  }
+
+  /* ==================== 顶部标题 ==================== */
+  .hdr {
+    position:sticky; top:0; z-index:15; display:flex; align-items:center; justify-content:space-between;
+    gap:10px; padding:12px 0 10px; background:linear-gradient(#0d1117f2,#0d1117d9);
+    backdrop-filter:blur(8px); border-bottom:1px solid var(--line); margin:0 -12px 12px; padding-left:12px; padding-right:12px;
+  }
+  .hdr h1 { font-size:17px; margin:0; }
+  .sub { color:var(--dim); font-size:11px; word-break:break-all; }
+  .pill { font-size:11px; border:1px solid var(--line); border-radius:999px; padding:3px 9px; color:var(--dim); white-space:nowrap; }
+  .pill.ok { color:var(--ok); border-color:#2386365c; }
+  .pill.err { color:var(--err); border-color:#f851495c; }
+
+  /* ==================== 卡片 / 通用 ==================== */
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
-  .card h2 { font-size:14px; margin:0 0 10px; color:var(--dim); font-weight:600; letter-spacing:.5px; }
-  .row { display:flex; justify-content:space-between; padding:4px 0; font-size:13px; }
-  .row span:last-child { color:var(--accent); font-variant-numeric: tabular-nums; }
-  button { background:#21262d; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; }
+  .card h2 { font-size:13px; margin:0 0 10px; color:var(--dim); font-weight:600; letter-spacing:.5px; display:flex; align-items:center; gap:8px; }
+  .dim { color:var(--dim); }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .err { color:var(--err); }
+  .hint { font-size:11px; color:var(--dim); line-height:1.55; margin:6px 0 0; }
+  .hint b { color:var(--accent); font-weight:600; }
+  code { background:var(--inner); border:1px solid var(--line); border-radius:6px; padding:1px 5px; font-size:11px; word-break:break-all; }
+  .empty { color:var(--dim); font-size:12px; padding:8px 0; }
+
+  /* 键值行 */
+  .kv { display:flex; gap:10px; align-items:flex-start; padding:4px 0; font-size:12px; }
+  .kv > span:first-child { color:var(--dim); flex:0 0 62px; }
+  .kv > span:last-child, .kv > code { flex:1; min-width:0; }
+
+  /* ==================== 状态宫格 ==================== */
+  .statgrid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
+  @media (min-width:520px) { .statgrid { grid-template-columns:repeat(4,1fr); } }
+  .stat { background:var(--inner); border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
+  .stat .k { font-size:11px; color:var(--dim); }
+  .stat .v { font-size:17px; color:var(--accent); font-variant-numeric:tabular-nums; line-height:1.3; }
+
+  /* ==================== 表单控件 ==================== */
+  input, select, textarea {
+    width:100%; background:var(--inner); border:1px solid var(--line); color:var(--text);
+    border-radius:8px; padding:9px 10px; font-size:13px; font-family:inherit;
+  }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); }
+  input:disabled { opacity:.55; }
+  .field { margin-bottom:10px; }
+  .field label { display:block; font-size:11px; color:var(--dim); margin-bottom:4px; }
+  .btnrow { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+
+  /* ==================== 按钮 ==================== */
+  button {
+    background:#21262d; color:var(--text); border:1px solid var(--line); border-radius:8px;
+    padding:9px 14px; font-size:13px; font-family:inherit; cursor:pointer;
+  }
   button:active { background:#30363d; }
-  button:disabled { opacity:.5; }
+  button:disabled { opacity:.5; cursor:default; }
   button.primary { background:#1f6feb; border-color:#1f6feb; }
-  .ok { color:var(--ok); } .warn { color:var(--warn); } .err { color:var(--err); } .dim { color:var(--dim); }
-  pre { background:#0b0f14; border:1px solid var(--line); border-radius:8px; padding:10px; font-size:11px; overflow:auto; max-height:220px; margin:8px 0 0; white-space:pre-wrap; word-break:break-all; }
-  input { background:#0b0f14; border:1px solid var(--line); color:var(--text); border-radius:8px; padding:8px 10px; font-size:13px; width:100%; }
-  .models { display:flex; flex-wrap:wrap; gap:6px; }
-  .tag { background:#21262d; border:1px solid var(--line); border-radius:6px; padding:3px 8px; font-size:11px; color:var(--dim); }
+  button.primary:active { background:#388bfd; }
+  button.danger { color:var(--err); border-color:#f8514959; }
+  button.sm { padding:5px 10px; font-size:12px; border-radius:7px; }
+
+  /* ==================== 开关 ==================== */
+  .switch { position:relative; display:inline-block; width:40px; height:22px; flex:0 0 auto; }
+  .switch input { position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:pointer; }
+  .switch .sl { position:absolute; inset:0; background:#30363d; border-radius:11px; transition:.15s; pointer-events:none; }
+  .switch .sl::after { content:""; position:absolute; width:16px; height:16px; border-radius:50%; background:#c9d1d9; top:3px; left:3px; transition:.15s; }
+  .switch input:checked + .sl { background:#238636; }
+  .switch input:checked + .sl::after { transform:translateX(18px); background:#fff; }
+
+  /* ==================== 供应商卡片 ==================== */
+  .pcard { border:1px solid var(--line); border-radius:10px; margin-bottom:10px; overflow:hidden; background:var(--inner); }
+  .pcard.off { opacity:.62; }
+  .phead { padding:10px 12px; }
+  .pline { display:flex; align-items:center; gap:8px; }
+  .pname { font-size:14px; font-weight:600; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pmeta { font-size:11px; color:var(--dim); margin-top:3px; word-break:break-all; }
+  .pacts { display:flex; gap:6px; margin-top:9px; flex-wrap:wrap; }
+  .tag { display:inline-block; background:#21262d; border:1px solid var(--line); border-radius:6px; padding:1px 7px; font-size:11px; color:var(--dim); margin:2px 4px 0 0; }
+  .tag.on { color:var(--accent); border-color:#1f6feb59; }
+
+  /* 卡片内账号行 */
+  .accs { border-top:1px solid var(--line); background:#0d1117; }
+  .acc { display:flex; align-items:center; gap:9px; padding:9px 12px; border-bottom:1px solid #21262d; }
+  .acc:last-child { border-bottom:0; }
+  .acc .main { flex:1; min-width:0; }
+  .acc .nm { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .acc .meta { font-size:11px; color:var(--dim); word-break:break-all; }
+  .acc.off .nm { color:var(--dim); text-decoration:line-through; }
+
+  /* ==================== 表格 ==================== */
+  .tblwrap { overflow-x:auto; margin-top:8px; -webkit-overflow-scrolling:touch; }
+  table.tbl { width:100%; border-collapse:collapse; font-size:12px; min-width:420px; }
+  table.tbl th, table.tbl td { padding:7px 6px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  table.tbl th { color:var(--dim); font-weight:600; font-size:11px; white-space:nowrap; }
+  table.tbl td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  table.tbl tr:last-child td { border-bottom:0; }
+  .badge { display:inline-block; border-radius:6px; padding:1px 6px; font-size:11px; border:1px solid var(--line); color:var(--dim); white-space:nowrap; }
+  .badge.ok { color:var(--ok); border-color:#2386365c; background:#23863614; }
+  .badge.warn { color:var(--warn); border-color:#d299225c; background:#d2992214; }
+  .badge.err { color:var(--err); border-color:#f851495c; background:#f8514914; }
+
+  /* ==================== 登录流程 ==================== */
+  .code-big {
+    font:600 21px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:2px;
+    color:var(--accent); background:var(--inner); border:1px dashed var(--line);
+    border-radius:10px; padding:12px; text-align:center; margin:8px 0; word-break:break-all;
+  }
+  .flow a { color:var(--accent); word-break:break-all; }
+  .flow .step { font-size:12px; margin:6px 0; }
+  #flowMsg { font-size:12px; margin-top:8px; }
+
+  /* ==================== 底部标签栏 ==================== */
+  .tabs {
+    position:fixed; left:0; right:0; bottom:0; z-index:20; display:flex;
+    background:#161b22f2; backdrop-filter:blur(10px);
+    border-top:1px solid var(--line); padding-bottom:env(safe-area-inset-bottom);
+  }
+  .tab {
+    flex:1; background:none; border:0; border-radius:0; color:var(--dim);
+    font-size:11px; padding:8px 2px 9px; display:flex; flex-direction:column; align-items:center; gap:3px;
+  }
+  .tab .ico { width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+  .tab.active { color:var(--accent); }
+
+  /* ==================== Toast ==================== */
+  #toasts {
+    position:fixed; left:0; right:0; bottom:calc(80px + env(safe-area-inset-bottom));
+    z-index:40; display:flex; flex-direction:column; align-items:center; gap:6px; pointer-events:none; padding:0 16px;
+  }
+  .toast {
+    max-width:100%; background:#1c2128; border:1px solid var(--line); border-left:3px solid var(--accent);
+    border-radius:8px; padding:8px 12px; font-size:12px; box-shadow:0 6px 18px #0008;
+    animation:tin .18s ease-out; word-break:break-word;
+  }
+  .toast.ok { border-left-color:var(--ok); }
+  .toast.err { border-left-color:var(--err); }
+  .toast.warn { border-left-color:var(--warn); }
+  @keyframes tin { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+
+  /* 页面切换 */
+  .page { display:none; }
+  .page.active { display:block; }
 </style>
 </head>
 <body>
-  <h1>All In</h1>
-  <div class="sub">手机上的 AI 网关 · <span id="endpoint">-</span></div>
 
+<header class="hdr">
+  <div style="min-width:0">
+    <h1>All In · AI 网关</h1>
+    <div class="sub" id="endpoint">-</div>
+  </div>
+  <div class="pill" id="health">…</div>
+</header>
+
+<main>
+
+<!-- ==================== 1. 总览 ==================== -->
+<section class="page active" id="page-overview">
   <div class="card">
     <h2>网关口令</h2>
-    <input id="key" placeholder="粘贴 authKey，回车保存" autocomplete="off">
-    <div class="dim" style="font-size:11px;margin-top:6px">只存在本机浏览器，用于调用本页面接口</div>
+    <div class="field" style="margin-bottom:0">
+      <input id="keyTop" placeholder="粘贴 authKey（也可用 URL 带 #key=xxx 打开）" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnKeyTop">保存并刷新</button>
+      <span class="dim" id="keyState" style="font-size:11px"></span>
+    </div>
+    <div class="hint">口令只存在本机 localStorage，用于给本页面的接口请求带上 <code>Authorization</code>。</div>
   </div>
 
   <div class="card">
     <h2>运行状态</h2>
-    <div id="status"><span class="dim">加载中…</span></div>
+    <div class="statgrid" id="statGrid"><div class="dim">加载中…</div></div>
   </div>
 
   <div class="card">
     <h2>WorkBuddy 每日签到</h2>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="primary" id="btnCheckin">立刻签到</button>
-      <button id="btnStatus">查签到状态</button>
+    <div class="btnrow" style="margin-top:0">
+      <button class="btn primary" id="btnCheckin">立刻签到</button>
+      <button class="btn" id="btnCheckinStatus">查签到状态</button>
     </div>
-    <div id="checkinResult" style="margin-top:8px"></div>
-    <pre id="checkinDetail" style="display:none"></pre>
+    <div id="checkinSummary" style="margin-top:8px"></div>
+    <div id="checkinBox"></div>
   </div>
 
   <div class="card">
-    <h2>可用模型 <span id="modelCount" class="dim"></span></h2>
-    <div class="models" id="models"><span class="dim">加载中…</span></div>
+    <h2>WorkBuddy 任务中心</h2>
+    <div class="hint" style="margin-top:0">
+      一次跑完全套：活跃上报 → 签到 → 连登 → 领赠礼 → 补偿 → 补签卡 → 领养 → 出行 → 抽奖。
+    </div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnRunTasks">一键跑全套任务</button>
+      <button class="btn" id="btnTaskStatus">查看任务状态</button>
+    </div>
+    <div id="taskSummary" style="margin-top:8px"></div>
+    <div id="taskBox"></div>
   </div>
 
+  <div class="card">
+    <h2>可用模型 <span class="dim" id="modelCount"></span></h2>
+    <div id="models"><span class="dim">加载中…</span></div>
+    <div class="hint">调用时模型名写成 <code>供应商id/模型名</code>，例如 <code>workbuddy/glm-5.3</code>。</div>
+  </div>
+</section>
+
+<!-- ==================== 2. 供应商 ==================== -->
+<section class="page" id="page-providers">
+  <div class="card">
+    <h2>供应商 <span class="dim" id="provCount"></span></h2>
+    <div id="providerList"><div class="dim">加载中…</div></div>
+  </div>
+
+  <div class="card" id="provFormCard">
+    <h2 id="provFormTitle">添加供应商</h2>
+    <div class="field">
+      <label>供应商 id（调用时用 id/模型，创建后不可改）</label>
+      <input id="fPid" placeholder="例如 workbuddy、my-openai" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label>显示名称</label>
+      <input id="fPname" placeholder="例如 腾讯 WorkBuddy" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>协议 kind</label>
+      <select id="fPkind"></select>
+    </div>
+    <div class="field">
+      <label>baseUrl（留空用该 kind 默认地址；编辑时留空表示不改）</label>
+      <input id="fPbase" placeholder="https://copilot.tencent.com/v1" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url">
+    </div>
+    <div class="field">
+      <label>apiKey（编辑时留空表示不改）</label>
+      <input id="fPkey" placeholder="sk-... / 访问令牌" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="field" style="margin-bottom:0">
+      <label>模型列表（英文逗号分隔）</label>
+      <input id="fPmodels" placeholder="gpt-4o, claude-sonnet-4-5" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="hint" id="provHint"></div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnProvSave">保存供应商</button>
+      <button class="btn" id="btnProvCancel" hidden>取消编辑</button>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 3. 账号 ==================== -->
+<section class="page" id="page-accounts">
+  <div class="card">
+    <h2>账号（按供应商分组）</h2>
+    <div id="accountGroups"><div class="dim">加载中…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>手动添加 / 覆盖账号</h2>
+    <div class="field">
+      <label>所属供应商</label>
+      <select id="fAprov"></select>
+    </div>
+    <div class="field">
+      <label>账号 id（留空自动生成；填已有 id 即覆盖）</label>
+      <input id="fAid" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label>名称（展示用）</label>
+      <input id="fAname" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>access / API Key（敏感，只显示预览）</label>
+      <input id="fAaccess" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label>refresh（可空）</label>
+      <input id="fArefresh" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label>uid（WorkBuddy 必填）</label>
+      <input id="fAuid" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label>domain（WorkBuddy 可填 copilot.tencent.com）</label>
+      <input id="fAdomain" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="field" style="margin-bottom:0">
+      <label>realm（cn / global，可空）</label>
+      <input id="fArealm" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnAccountSave">保存账号</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>登录流程（成功后自动写入账号）</h2>
+    <div class="btnrow" style="margin-top:0">
+      <button class="btn primary" id="btnWorkBuddyLogin">走 WorkBuddy 登录</button>
+      <button class="btn primary" id="btnTraeLogin">走 Trae 登录</button>
+      <button class="btn primary" id="btnCopilotLogin">走 GitHub Copilot 登录</button>
+      <button class="btn primary" data-authflow="antigravity">走 Antigravity 登录</button>
+      <button class="btn primary" data-authflow="catpaw">走 CatPaw 登录</button>
+      <button class="btn primary" data-authflow="cline">走 Cline 登录</button>
+      <button class="btn primary" data-authflow="codex">走 Codex 登录</button>
+      <button class="btn primary" data-authflow="minimax">走 MiniMax 登录</button>
+      <button class="btn primary" data-authflow="qoder">走 Qoder 登录</button>
+      <button class="btn primary" data-authflow="raccoon">走 小浣熊 登录</button>
+      <button class="btn primary" data-authflow="wenxin">走 文心 登录</button>
+    </div>
+    <div class="flow" id="flowBox"></div>
+  </div>
+
+  <div class="card">
+    <h2>账号池健康 <button class="btn sm" id="btnPool" style="margin-left:auto">刷新</button></h2>
+    <div id="poolBox" class="dim">点「刷新」查看成功/失败/冷却情况</div>
+  </div>
+</section>
+
+<!-- ==================== 4. 用量 ==================== -->
+<section class="page" id="page-usage">
+  <div class="card">
+    <h2>用量（进程内计数，网关重启归零）</h2>
+    <div class="btnrow" style="margin-top:0">
+      <button class="btn" id="btnUsageRefresh">刷新</button>
+      <button class="btn danger" id="btnUsageReset">重置计数</button>
+    </div>
+    <div id="usageBox"><div class="dim" style="margin-top:8px">加载中…</div></div>
+    <div class="hint">这些数字由网关进程在转发请求时累加，进程重启归零；若长期为空，说明后端还没把记录点接到请求路径上。</div>
+  </div>
+</section>
+
+<!-- ==================== 5. 设置 ==================== -->
+<section class="page" id="page-settings">
+  <div class="card">
+    <h2>基本信息</h2>
+    <div class="kv"><span>配置文件</span><code id="cfgPath">-</code></div>
+    <div class="kv"><span>监听地址</span><code id="cfgListen">-</code></div>
+    <div class="kv"><span>端点</span><code id="cfgEndpoint">-</code></div>
+    <div class="kv"><span>口令来源</span><span id="cfgKeyOrigin" class="dim">-</span></div>
+  </div>
+
+  <div class="card">
+    <h2>系统提示词注入</h2>
+    <div class="dim" style="font-size:12px;margin-bottom:8px">
+      在这里设置的提示词会在网关层强制注入到每个请求，客户端自己带什么 system 都压得住。
+    </div>
+    <div class="field">
+      <label>模式</label>
+      <select id="promptMode">
+        <option value="passthrough">passthrough — 原样转发，不注入</option>
+        <option value="inject">inject — 插在客户端提示词前面（压过它）</option>
+        <option value="replace">replace — 丢掉客户端自带的，只用自己的</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>提示词正文 <span class="dim" id="promptLen"></span></label>
+      <textarea id="promptText" rows="10" placeholder="粘贴系统提示词…" style="width:100%;box-sizing:border-box;font-size:12px;line-height:1.5"></textarea>
+    </div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnSavePrompt">保存</button>
+      <button class="btn" id="btnPresetM0SS">一键写入 M0SS 人设</button>
+      <button class="btn" id="btnReloadPrompt">重新加载</button>
+    </div>
+    <div id="promptMsg" class="dim" style="font-size:12px;margin-top:6px"></div>
+  </div>
+
+  <div class="card">
+    <h2>客户端 API Key</h2>
+    <div class="dim" style="font-size:12px;margin-bottom:8px">
+      给客户端用的调用凭据，可以给不同设备各发一把、单独吊销。主网关口令本身也能直接当 key 用。
+    </div>
+    <div class="btnrow" style="margin-top:0">
+      <button class="btn primary" id="btnNewKey">生成新 Key</button>
+      <button class="btn" id="btnRefreshKeys">刷新列表</button>
+    </div>
+    <div id="keyNewBox" style="margin-top:10px"></div>
+    <div id="keyList" style="margin-top:10px"><span class="dim">加载中…</span></div>
+  </div>
+
+  <div class="card">
+    <h2>修改网关口令</h2>
+    <div class="field" style="margin-bottom:0">
+      <label>新口令（留空表示不修改，当前口令不会回显）</label>
+      <input id="fNewKey" placeholder="输入新口令" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnSaveKey">保存口令</button>
+      <button class="btn" id="btnClearKey">清除本机保存的口令</button>
+    </div>
+    <div class="hint">保存后本页会自动记住新口令；客户端那边也要同步改 <code>Authorization: Bearer</code>。</div>
+  </div>
+
+  <div class="card">
+    <h2>监听地址（改端口需重启网关）</h2>
+    <div class="field">
+      <label>host（0.0.0.0 表示局域网可访问）</label>
+      <input id="fHost" placeholder="127.0.0.1" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="field" style="margin-bottom:0">
+      <label>port</label>
+      <input id="fPort" inputmode="numeric" placeholder="3425" autocomplete="off">
+    </div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnSaveListen">保存监听设置</button>
+    </div>
+    <div class="hint">保存只写配置文件，进程要重启才会换端口（面板会提示是否需要重启）。</div>
+  </div>
+</section>
+
+</main>
+
+<!-- ==================== 底部标签栏 ==================== -->
+<nav class="tabs">
+  <button class="tab active" data-tab="overview"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>总览</button>
+  <button class="tab" data-tab="providers"><svg class="ico" viewBox="0 0 24 24"><path d="M4 8.5 12 4l8 4.5-8 4.5-8-4.5Z"/><path d="M4 12.5 12 17l8-4.5"/><path d="M4 16.5 12 21l8-4.5"/></svg>供应商</button>
+  <button class="tab" data-tab="accounts"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c1.6-4 4.2-6 7.5-6s5.9 2 7.5 6"/></svg>账号</button>
+  <button class="tab" data-tab="usage"><svg class="ico" viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H3"/></svg>用量</button>
+  <button class="tab" data-tab="settings"><svg class="ico" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="17" r="2"/></svg>设置</button>
+</nav>
+
+<div id="toasts"></div>
+
 <script>
-const $ = s => document.querySelector(s);
-const keyEl = $('#key');
+"use strict";
+/* =====================================================================
+   全局面板状态
+   S.key       网关口令（存在 localStorage）
+   S.providers /api/providers 的供应商列表
+   S.kinds     后端支持的协议 kind 列表
+   S.status    /api/status 快照
+   S.config    /api/config 脱敏配置（保存设置时整体回传）
+   S.tab       当前标签页
+   S.editing   正在编辑的供应商 id（null 表示「添加」模式）
+   S.expanded  已展开账号列表的供应商 id 集合
+   S.poll      登录流程轮询控制（gen 自增用于取消旧循环）
+   ===================================================================== */
+const S = {
+  key: '', providers: [], kinds: [], status: null, config: null,
+  tab: 'overview', editing: null, expanded: new Set(),
+  poll: { gen: 0, timer: 0, startedAt: 0, deadlineAt: 0 },
+};
 
-// 口令：优先 URL hash（#key=xxx），其次本地存储
-(function initKey(){
+const $ = (s) => document.querySelector(s);
+const el = (id) => document.getElementById(id);
+
+/* ===================== 小工具 ===================== */
+
+// HTML 转义：所有来自后端/用户的数据都要过一遍，避免引号/尖括号把结构打坏
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+const p2 = (n) => String(n).padStart(2, '0');
+
+// 秒 → 人类可读时长
+function fmtDur(sec) {
+  if (sec == null) return '-';
+  sec = Math.max(0, Math.floor(sec));
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600),
+        m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (d) return d + ' 天 ' + h + ' 小时';
+  if (h) return h + ' 小时 ' + m + ' 分';
+  if (m) return m + ' 分 ' + s + ' 秒';
+  return s + ' 秒';
+}
+
+// 时间戳（秒或毫秒）→ 本地时间字符串
+function fmtDate(v) {
+  if (!v) return '-';
+  const ms = Number(v) > 1e12 ? Number(v) : Number(v) * 1000;
+  const d = new Date(ms);
+  if (isNaN(d.getTime())) return '-';
+  return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) +
+    ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes());
+}
+
+// 「多久之前」
+function fmtAgo(sec) {
+  if (sec == null || sec === '') return '';
+  sec = Math.floor(sec);
+  if (sec < 60) return sec + ' 秒前';
+  if (sec < 3600) return Math.floor(sec / 60) + ' 分钟前';
+  if (sec < 86400) return Math.floor(sec / 3600) + ' 小时前';
+  return Math.floor(sec / 86400) + ' 天前';
+}
+
+// 数字千分位
+function fmtNum(n) {
+  n = Number(n || 0);
+  return n.toLocaleString('zh-CN');
+}
+
+/* ===================== Toast 提示（所有错误都要可见） ===================== */
+function toast(msg, kind) {
+  const box = el('toasts');
+  const d = document.createElement('div');
+  d.className = 'toast ' + (kind || '');
+  d.textContent = msg;
+  box.appendChild(d);
+  setTimeout(() => {
+    d.style.transition = 'opacity .25s';
+    d.style.opacity = '0';
+    setTimeout(() => d.remove(), 260);
+  }, kind === 'err' ? 4200 : 2600);
+}
+
+/* ===================== API 封装 ===================== */
+// 后端错误有两种形状：{error:{message}} 和 {ok:false,error:"字符串"}，都要认
+function pickErr(data, status) {
+  if (!data) return 'HTTP ' + status;
+  const e = data.error;
+  if (typeof e === 'string' && e) return e;
+  if (e && typeof e === 'object') return e.message || e.type || ('HTTP ' + status);
+  if (data.message) return data.message;
+  if (data.hint) return data.hint;
+  return 'HTTP ' + status;
+}
+
+async function api(path, opts) {
+  opts = opts || {};
+  const init = { method: opts.method || 'GET', headers: { 'Accept': 'application/json' } };
+  if (S.key) init.headers['Authorization'] = 'Bearer ' + S.key;
+  if (opts.body !== undefined) {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
+  }
+  let res;
+  try {
+    res = await fetch(path, init);
+  } catch (e) {
+    throw new Error('网络请求失败：' + (e && e.message ? e.message : '连接不上网关'));
+  }
+  const text = await res.text();
+  let data = {};
+  if (text) {
+    try { data = JSON.parse(text); } catch (e) { data = { raw: text }; }
+  }
+  if (!res.ok) {
+    if (res.status === 401) throw new Error('口令不对或未填写（HTTP 401），请到「总览」检查网关口令');
+    throw new Error(pickErr(data, res.status));
+  }
+  return data;
+}
+
+/* ===================== 口令管理 ===================== */
+// 同时更新输入框与本地存储；retry 为真时重新加载当前页
+function setKey(k, reload) {
+  S.key = (k || '').trim();
+  try { localStorage.setItem('allin_key', S.key); } catch (e) { /* 隐私模式下忽略 */ }
+  el('keyTop').value = S.key;
+  el('keyState').textContent = S.key ? '已保存（' + S.key.slice(0, 4) + '…）' : '未设置';
+  if (reload) reloadTab();
+}
+
+// 优先级：URL hash (#key=xxx) > localStorage
+(function initKey() {
+  let fromHash = '';
   const m = location.hash.match(/key=([^&]+)/);
-  if (m) { keyEl.value = decodeURIComponent(m[1]); localStorage.setItem('allin_key', keyEl.value); }
-  else { keyEl.value = localStorage.getItem('allin_key') || ''; }
+  if (m) fromHash = decodeURIComponent(m[1]);
+  let saved = '';
+  try { saved = localStorage.getItem('allin_key') || ''; } catch (e) { /* 忽略 */ }
+  const k = fromHash || saved;
+  S.key = k.trim();
+  el('keyTop').value = S.key;
+  el('keyState').textContent = S.key ? '已保存（' + S.key.slice(0, 4) + '…）' : '未设置';
+  if (fromHash) {
+    try { localStorage.setItem('allin_key', S.key); } catch (e) { /* 忽略 */ }
+    // 把口令从地址栏抹掉，避免被截图/历史记录带走
+    history.replaceState(null, '', location.pathname + location.search);
+  }
 })();
-keyEl.addEventListener('change', () => { localStorage.setItem('allin_key', keyEl.value.trim()); refresh(); });
 
-function api(path, opts = {}) {
-  const k = keyEl.value.trim();
-  return fetch(path, {
-    ...opts,
-    headers: { 'Authorization': 'Bearer ' + k, 'Content-Type': 'application/json', ...(opts.headers || {}) },
-  }).then(async r => {
-    const text = await r.text();
-    let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
-    if (!r.ok) throw new Error((data.error && (data.error.message || data.error)) || ('HTTP ' + r.status));
-    return data;
+el('btnKeyTop').addEventListener('click', () => {
+  setKey(el('keyTop').value, true);
+  toast('口令已保存', 'ok');
+});
+el('keyTop').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { setKey(el('keyTop').value, true); toast('口令已保存', 'ok'); }
+});
+
+/* ===================== 标签页切换 ===================== */
+const LOADERS = {
+  overview: loadOverview,
+  providers: loadProviders,
+  accounts: loadAccountsTab,
+  usage: loadUsage,
+  settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); },
+};
+
+function switchTab(name) {
+  S.tab = name;
+  document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.page').forEach((p) => p.classList.toggle('active', p.id === 'page-' + name));
+  window.scrollTo({ top: 0 });
+  const fn = LOADERS[name];
+  if (fn) fn();
+}
+function reloadTab() {
+  const fn = LOADERS[S.tab];
+  if (fn) fn();
+}
+document.querySelectorAll('.tab').forEach((b) => {
+  b.addEventListener('click', () => switchTab(b.dataset.tab));
+});
+
+/* =====================================================================
+   1. 总览
+   ===================================================================== */
+
+// 顶部健康标记
+function setHealth(ok, text) {
+  const h = el('health');
+  h.className = 'pill ' + (ok ? 'ok' : 'err');
+  h.textContent = text;
+}
+
+async function loadOverview() {
+  el('endpoint').textContent = location.host + '/v1';
+  // 运行状态
+  try {
+    const s = await api('/api/status');
+    S.status = s;
+    renderStatus(s);
+    setHealth(true, '在线 ' + fmtDur(s.uptimeSec));
+  } catch (e) {
+    el('statGrid').innerHTML = '<div class="err">加载运行状态失败：' + esc(e.message) + '</div>';
+    setHealth(false, '异常');
+    el('modelCount').textContent = '';
+    el('models').innerHTML = '<span class="dim">口令缺失或服务不可用时无法读取模型</span>';
+    return;
+  }
+  // 模型列表
+  try {
+    const m = await api('/api/models');
+    const list = (m && m.data) || [];
+    el('modelCount').textContent = '(' + list.length + ')';
+    el('models').innerHTML = list.length
+      ? '<div>' + list.map((x) => '<span class="tag on">' + esc(x.id) + '</span>').join('') + '</div>'
+      : '<span class="dim">还没有可用模型，先去「供应商」加一个并填好 key</span>';
+  } catch (e) {
+    el('modelCount').textContent = '';
+    el('models').innerHTML = '<span class="err">读取模型失败：' + esc(e.message) + '</span>';
+  }
+}
+
+function renderStatus(s) {
+  const rows = [
+    ['运行时长', fmtDur(s.uptimeSec)],
+    ['请求数', fmtNum(s.requests)],
+    ['错误数', fmtNum(s.errors)],
+    ['换号次数', fmtNum(s.switches)],
+    ['供应商', fmtNum(s.providers)],
+    ['账号', fmtNum(s.accounts)],
+    ['模型', fmtNum(s.models)],
+  ];
+  el('statGrid').innerHTML = rows.map(([k, v]) =>
+    '<div class="stat"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'
+  ).join('');
+}
+
+/* ===================== WorkBuddy 签到 ===================== */
+// outcome → 中文文案 + 颜色
+// 跳过原因的中文说明
+const SKIP = { disabled: '账号已禁用', no_credential: '缺少 uid / access' };
+
+const OUTCOME = {
+  ok: ['已签到', 'ok'],
+  already: ['今日已签', 'warn'],
+  network: ['网络错误', 'err'],
+  rejected: ['被上游拒绝', 'err'],
+  bad_response: ['响应异常', 'err'],
+  sign_in_required: ['凭据失效', 'err'],
+};
+
+function renderCheckin(d, dry) {
+  const results = (d && d.results) || [];
+  const sum = [];
+  if (d && d.total != null) sum.push('共 ' + d.total + ' 个账号');
+  if (d && d.succeeded != null && !dry) sum.push('<span class="ok">新签 ' + d.succeeded + '</span>');
+  if (d && d.already != null && !dry) sum.push('<span class="warn">今日已签 ' + d.already + '</span>');
+  if (d && d.failed) sum.push('<span class="err">失败 ' + d.failed + '</span>');
+  if (d && d.skipped) sum.push('<span class="dim">跳过 ' + d.skipped + '</span>');
+  el('checkinSummary').innerHTML = sum.length
+    ? '<div style="font-size:12px">' + sum.join(' · ') + (d.note ? ' · <span class="dim">' + esc(d.note) + '</span>' : '') + '</div>'
+    : '';
+
+  if (!results.length) {
+    el('checkinBox').innerHTML = '<div class="empty">没有可签到的账号（需要在 workbuddy 供应商下加带 uid 的账号）</div>';
+    return;
+  }
+  const rows = results.map((r) => {
+    const oc = r.outcome || (dry ? r.checkinOutcome : '') || '';
+    const meta = dry
+      ? (r.skipped ? '<span class="dim">跳过：' + esc(SKIP[r.skipped] || r.skipped) + '</span>'
+        : (r.checkinDate ? '上次签到 ' + esc(r.checkinDate) : '未签到过'))
+      : (r.error ? '<span class="err">' + esc(r.error) + '</span>'
+        : (r.skipped ? '<span class="dim">跳过：' + esc(SKIP[r.skipped] || r.skipped) + '</span>' : ''));
+    let badge;
+    if (r.skipped && !r.outcome) badge = '<span class="badge">跳过</span>';
+    else if (dry && !oc) badge = '<span class="badge">未签到</span>';
+    else if (oc) {
+      const pair = OUTCOME[oc] || [oc, ''];
+      badge = '<span class="badge ' + pair[1] + '">' + esc(pair[0]) + '</span>';
+    } else badge = '<span class="badge">未查</span>';
+    const credit = r.credit != null ? r.credit : (r.checkinCredit != null ? r.checkinCredit : '');
+    const streak = r.streakDays != null ? r.streakDays : (r.checkinStreak != null ? r.checkinStreak : '');
+    return '<tr>' +
+      '<td>' + esc(r.name || r.accountId || r.account || '-') +
+        '<div class="dim" style="font-size:11px">' + esc(r.provider || '') + '</div></td>' +
+      '<td>' + badge + '</td>' +
+      '<td class="num">' + esc(credit === '' ? '-' : credit) + '</td>' +
+      '<td class="num">' + esc(streak === '' ? '-' : streak) + '</td>' +
+      '<td>' + (meta || '<span class="dim">-</span>') + '</td>' +
+      '</tr>';
+  }).join('');
+  el('checkinBox').innerHTML =
+    '<div class="tblwrap"><table class="tbl"><thead><tr>' +
+    '<th>账号</th><th>结果</th><th>积分</th><th>连续</th><th>备注</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+
+// ---------- WorkBuddy 任务中心 ----------
+function renderTasks(results) {
+  let html = '';
+  results.forEach(r => {
+    const tasks = r.tasks || [];
+    html += '<div class="card" style="margin:8px 0 0;background:#0b0f14">' +
+      '<div style="font-size:13px;margin-bottom:6px"><b>' + esc(r.name || r.accountId) + '</b>' +
+      (r.credit ? ' <span class="ok">+' + r.credit + ' 积分</span>' : '') +
+      (r.ok ? ' <span class="ok">✓</span>' : ' <span class="err">✗</span>') + '</div>' +
+      '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+    tasks.forEach(t => {
+      const o = t.outcome || {};
+      const st = o.status || '?';
+      const cls = st === 'ok' ? 'ok' : (st === 'failed' ? 'err' : 'dim');
+      html += '<tr><td style="padding:2px 6px 2px 0;white-space:nowrap">' + esc(t.name) + '</td>' +
+        '<td style="padding:2px 6px 2px 0" class="' + cls + '">' + esc(st) + '</td>' +
+        '<td style="padding:2px 0" class="dim">' + esc(o.message || '') + '</td></tr>';
+    });
+    html += '</table></div>';
+  });
+  return html || '<span class="dim">没有结果</span>';
+}
+
+el('btnRunTasks').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  el('taskSummary').innerHTML = '<span class="dim">正在跑全套任务（每号约 10 项，可能要一两分钟）…</span>';
+  el('taskBox').innerHTML = '';
+  try {
+    const d = await api('/api/workbuddy/tasks', { method: 'POST', body: {} });
+    const results = d.results || [];
+    const failed = d.failed || 0;
+    el('taskSummary').innerHTML = '<span class="' + (failed > 0 ? 'warn' : 'ok') + '">' +
+      '完成 ' + results.length + ' 个账号' + (failed ? '，' + failed + ' 个有失败项' : '，全部正常') + '</span>';
+    el('taskBox').innerHTML = renderTasks(results);
+    toast('任务已跑完', 'ok');
+  } catch (err) {
+    el('taskSummary').innerHTML = '<span class="err">' + esc(err.message) + '</span>';
+    toast(err.message, 'err');
+  } finally { btn.disabled = false; }
+});
+
+el('btnTaskStatus').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  el('taskBox').innerHTML = '<span class="dim">加载中…</span>';
+  try {
+    const d = await api('/api/workbuddy/tasks/status');
+    const rows = d.results || [];
+    let html = '';
+    rows.forEach(r => {
+      const st = r.status || {};
+      html += '<div class="card" style="margin:8px 0 0;background:#0b0f14">' +
+        '<div style="font-size:13px;margin-bottom:6px"><b>' + esc(r.name || r.accountId) + '</b></div>';
+      if (st.buddy) {
+        html += '<div class="kv"><span>宠物</span><span>' + esc(st.buddy.name || '无') + '</span></div>';
+      }
+      if (st.streak && st.streak.streak) {
+        html += '<div class="kv"><span>连登</span><span>' + esc(st.streak.streak.days) +
+          ' 天（月累计 ' + esc(st.streak.streak.month_total_days) + '）</span></div>';
+      }
+      if (st.streak && st.streak.makeup_cards) {
+        html += '<div class="kv"><span>补签卡</span><span>' + esc(st.streak.makeup_cards.balance) + ' 张</span></div>';
+      }
+      ['buddyError','streakError','lotteryError','compensationError'].forEach(k => {
+        if (st[k]) html += '<div class="kv"><span class="err">' + esc(k) + '</span><span class="err">' + esc(String(st[k]).slice(0,60)) + '</span></div>';
+      });
+      html += '</div>';
+    });
+    el('taskBox').innerHTML = html || '<span class="dim">没有账号</span>';
+    el('taskSummary').innerHTML = '<span class="dim">只读查询，不会改动任何状态</span>';
+  } catch (err) {
+    el('taskBox').innerHTML = '<span class="err">' + esc(err.message) + '</span>';
+    toast(err.message, 'err');
+  } finally { btn.disabled = false; }
+});
+
+el('btnCheckin').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  el('checkinSummary').innerHTML = '<span class="dim">正在逐个签到（每账号约 1.2 秒节流）…</span>';
+  try {
+    const d = await api('/api/workbuddy/checkin', { method: 'POST', body: '{}' });
+    renderCheckin(d, false);
+    toast('签到完成：新签 ' + (d.succeeded || 0) + ' · 已签 ' + (d.already || 0) + ' · 失败 ' + (d.failed || 0),
+      d.failed ? 'warn' : 'ok');
+    loadOverview(); // 刷新状态里的数字
+  } catch (err) {
+    el('checkinSummary').innerHTML = '<span class="err">签到失败：' + esc(err.message) + '</span>';
+    toast(err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+el('btnCheckinStatus').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  el('checkinSummary').innerHTML = '<span class="dim">读取签到记录…</span>';
+  try {
+    const d = await api('/api/workbuddy/checkin-status');
+    renderCheckin(d, true);
+  } catch (err) {
+    el('checkinSummary').innerHTML = '<span class="err">读取失败：' + esc(err.message) + '</span>';
+    toast(err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* =====================================================================
+   2. 供应商（列表 / 增删改 / 账号管理）
+   ===================================================================== */
+
+// 各 kind 的填写提示
+const KIND_HINTS = {
+  'openai': '标准 OpenAI 兼容协议，绝大多数厂商走这套。baseUrl 一般以 <b>/v1</b> 结尾，apiKey 填厂商密钥。',
+  'anthropic': 'Anthropic Messages 协议。baseUrl 一般 <b>https://api.anthropic.com/v1</b>。',
+  'workbuddy': '腾讯 WorkBuddy：baseUrl 填 <b>https://copilot.tencent.com/v1</b>（国内）或 <b>https://www.workbuddy.ai/v1</b>（国际）。<br>apiKey 可留空，实际凭据在「账号」里按账号填 <b>uid + access</b>（抓包得到的 access token）。<br>签到接口走根路径 <b>/v2/billing/meter/daily-checkin</b>。',
+  'trae': 'Trae：baseUrl 填 <b>https://trae-api-cn.mchost.guru</b>。<br>账号必须带设备身份（deviceId / machineId / 公私钥），手填很难，建议到「账号」页点 <b>走 Trae 登录</b>，成功后自动写入 <b>trae-cn</b> 供应商。',
+  'copilot': 'GitHub Copilot：baseUrl 填 <b>https://api.githubcopilot.com</b>。<br>别手填 token，到「账号」页点 <b>走 GitHub Copilot 登录</b>，用设备码授权，成功后自动写入 <b>github-copilot</b> 供应商。',
+  'codex': 'Codex：baseUrl 默认 <b>https://chatgpt.com/backend-api/codex</b>，账号是 ChatGPT 登录态。',
+  'deepseek-web': 'DeepSeek 网页版私有协议：baseUrl 默认 <b>https://chat.deepseek.com</b>，账号填网页登录得到的 token。',
+  'qoder': 'Qoder：baseUrl 默认 <b>https://gateway.qoder.com.cn</b>，账号要 COSY 信封凭据（含邮箱）。',
+  'raccoon': '小浣熊：baseUrl 默认 <b>https://xiaohuanxiong.com</b>，账号填网页登录态。',
+  'loomy': '讯飞 Loomy：baseUrl 默认 <b>https://loomyad.xunfei.cn</b>。',
+  'cline': 'Cline：baseUrl 默认 <b>https://api.cline.bot/api/v1</b>。',
+  'minimax': 'MiniMax Agent：baseUrl 默认 <b>https://agent.minimax.cn/mavis/api/v1/llm/v1</b>。',
+  'catpaw': '美团妙手（猫爪）网页版私有协议：baseUrl 默认 <b>https://ai.catpaw.meituan.com</b>，账号用网页 cookie/token。',
+  'wenxin': '百度文心一言网页版：baseUrl 默认 <b>https://chat.baidu.com</b>，账号用网页登录态。',
+  'antigravity': 'Google Antigravity：baseUrl 默认走 cloudcode-pa，账号是 Google 登录态。',
+};
+
+function renderKindSelect() {
+  const sel = el('fPkind');
+  const keep = sel.value;
+  const kinds = S.kinds.length ? S.kinds : Object.keys(KIND_HINTS);
+  sel.innerHTML = '<option value="">（请选择协议）</option>' +
+    kinds.map((k) => '<option value="' + esc(k) + '">' + esc(k) + '</option>').join('');
+  if (kinds.indexOf(keep) >= 0) sel.value = keep;
+  updateKindHint();
+}
+
+function updateKindHint() {
+  const k = el('fPkind').value;
+  el('provHint').innerHTML = KIND_HINTS[k] || '未知 kind 会按原值往下走；一般选 openai / anthropic 就够用。';
+}
+
+el('fPkind').addEventListener('change', updateKindHint);
+
+function renderProviderSelect() {
+  const sel = el('fAprov');
+  const keep = sel.value;
+  sel.innerHTML = S.providers.length
+    ? S.providers.map((p) => '<option value="' + esc(p.id) + '">' + esc((p.name || p.id) + '  (' + p.id + ')') + '</option>').join('')
+    : '<option value="">（还没有供应商，先到「供应商」页添加）</option>';
+  if (keep && S.providers.some((p) => p.id === keep)) sel.value = keep;
+}
+
+async function loadProviders() {
+  try {
+    const d = await api('/api/providers');
+    S.providers = d.providers || [];
+    S.kinds = d.kinds || S.kinds;
+    el('provCount').textContent = '(' + S.providers.length + ')';
+    renderKindSelect();
+    renderProviderSelect();
+    renderProviderList();
+    renderAccountGroups();
+  } catch (e) {
+    el('providerList').innerHTML = '<div class="err">加载失败：' + esc(e.message) + '</div>';
+    el('accountGroups').innerHTML = '<div class="err">加载失败：' + esc(e.message) + '</div>';
+    toast(e.message, 'err');
+  }
+}
+
+// 供应商卡片（含可展开账号列表）
+function renderProviderList() {
+  const box = el('providerList');
+  if (!S.providers.length) {
+    box.innerHTML = '<div class="empty">还没有供应商。用下面的表单加一个，或到「账号」页走登录流程自动创建。</div>';
+    return;
+  }
+  box.innerHTML = S.providers.map((p) => {
+    const accounts = p.accounts || [];
+    const expanded = S.expanded.has(p.id);
+    const models = (p.models || []);
+    const accHtml = accounts.length
+      ? accounts.map((a) => {
+        const on = a.enabled !== false;
+        return '<div class="acc' + (on ? '' : ' off') + '">' +
+          '<div class="main">' +
+            '<div class="nm">' + esc(a.name || a.id) + (a.type ? ' <span class="tag">' + esc(a.type) + '</span>' : '') + '</div>' +
+            '<div class="meta">id: ' + esc(a.id) +
+              (a.keyPreview ? ' · key: ' + esc(a.keyPreview) : '') +
+              (a.expires ? ' · 到期 ' + esc(fmtDate(a.expires)) : '') +
+            '</div>' +
+            (a.checkinDate ? '<div class="meta">签到 ' + esc(a.checkinDate) + ' · ' + esc(a.checkinOutcome || '-') + '</div>' : '') +
+          '</div>' +
+          '<label class="switch"><input type="checkbox" data-act="acc-toggle" data-pid="' + esc(p.id) + '" data-aid="' + esc(a.id) + '"' +
+            (on ? ' checked' : '') + '><span class="sl"></span></label>' +
+          '<button class="btn sm danger" data-act="acc-del" data-pid="' + esc(p.id) + '" data-aid="' + esc(a.id) + '">删</button>' +
+          '</div>';
+      }).join('')
+      : '<div class="empty" style="padding:10px 12px">这个供应商还没有账号，可在此页手动添加，或到「账号」页走登录流程</div>';
+
+    return '<div class="pcard' + (p.enabled === false ? ' off' : '') + '">' +
+      '<div class="phead">' +
+        '<div class="pline">' +
+          '<div class="pname">' + esc(p.name || p.id) + '</div>' +
+          '<label class="switch"><input type="checkbox" data-act="prov-toggle" data-pid="' + esc(p.id) + '"' +
+            (p.enabled === false ? '' : ' checked') + '><span class="sl"></span></label>' +
+        '</div>' +
+        '<div class="pmeta"><span class="tag">' + esc(p.kind || 'openai') + '</span> id: ' + esc(p.id) + '</div>' +
+        '<div class="pmeta">' + esc(p.baseUrl || '（用该 kind 的默认 baseUrl）') + '</div>' +
+        '<div style="margin-top:5px">' + (models.length
+          ? models.map((m) => '<span class="tag on">' + esc(m) + '</span>').join('')
+          : '<span class="dim" style="font-size:11px">未配置模型</span>') + '</div>' +
+        '<div class="pacts">' +
+          '<button class="btn sm" data-act="prov-expand" data-pid="' + esc(p.id) + '">' +
+            (expanded ? '收起账号' : '账号 (' + accounts.length + ')') + '</button>' +
+          '<button class="btn sm" data-act="prov-edit" data-pid="' + esc(p.id) + '">编辑</button>' +
+          '<button class="btn sm danger" data-act="prov-del" data-pid="' + esc(p.id) + '">删除</button>' +
+        '</div>' +
+      '</div>' +
+      (expanded ? '<div class="accs">' + accHtml + '</div>' : '') +
+      '</div>';
+  }).join('');
+}
+
+// 全局账号视图（按供应商分组）
+function renderAccountGroups() {
+  const box = el('accountGroups');
+  if (!S.providers.length) {
+    box.innerHTML = '<div class="empty">还没有供应商，先去「供应商」页添加</div>';
+    return;
+  }
+  const groups = S.providers.map((p) => {
+    const accounts = p.accounts || [];
+    const rows = accounts.length
+      ? accounts.map((a) => {
+        const on = a.enabled !== false;
+        return '<div class="acc' + (on ? '' : ' off') + '">' +
+          '<div class="main">' +
+            '<div class="nm">' + esc(a.name || a.id) + '</div>' +
+            '<div class="meta">' + esc(a.id) +
+              (a.type ? ' · ' + esc(a.type) : '') +
+              (a.keyPreview ? ' · ' + esc(a.keyPreview) : '') +
+            '</div>' +
+            '<div class="meta">到期 ' + esc(fmtDate(a.expires)) +
+              (a.checkinDate ? ' · 签到 ' + esc(a.checkinDate) : '') + '</div>' +
+          '</div>' +
+          '<label class="switch"><input type="checkbox" data-act="acc-toggle" data-pid="' + esc(p.id) + '" data-aid="' + esc(a.id) + '"' +
+            (on ? ' checked' : '') + '><span class="sl"></span></label>' +
+          '<button class="btn sm danger" data-act="acc-del" data-pid="' + esc(p.id) + '" data-aid="' + esc(a.id) + '">删</button>' +
+          '</div>';
+      }).join('')
+      : '<div class="empty" style="padding:10px 12px">无账号</div>';
+    return '<div class="pcard">' +
+      '<div class="phead" style="padding:9px 12px">' +
+        '<div class="pline"><div class="pname">' + esc(p.name || p.id) + '</div>' +
+        '<span class="tag">' + esc(p.kind || 'openai') + '</span>' +
+        '<span class="dim" style="font-size:11px">' + accounts.length + ' 个</span></div>' +
+      '</div>' +
+      '<div class="accs">' + rows + '</div></div>';
+  }).join('');
+  box.innerHTML = groups;
+}
+
+/* ---------- 供应商卡片上的事件（事件委托） ---------- */
+el('providerList').addEventListener('change', (e) => {
+  const t = e.target;
+  if (t.dataset.act !== 'prov-toggle') return;
+  toggleProvider(t.dataset.pid, t.checked);
+});
+el('providerList').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const id = b.dataset.pid;
+  const act = b.dataset.act;
+  if (act === 'prov-expand') {
+    if (S.expanded.has(id)) S.expanded.delete(id); else S.expanded.add(id);
+    renderProviderList();
+  } else if (act === 'prov-edit') {
+    editProvider(id);
+  } else if (act === 'prov-del') {
+    deleteProvider(id);
+  } else if (act === 'acc-del') {
+    deleteAccount(b.dataset.pid, b.dataset.aid);
+  }
+});
+// 账号开关在「账号」页也要生效
+el('accountGroups').addEventListener('change', (e) => {
+  const t = e.target;
+  if (t.dataset.act === 'acc-toggle') toggleAccount(t.dataset.pid, t.dataset.aid, t.checked);
+});
+el('accountGroups').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-act="acc-del"]');
+  if (b) deleteAccount(b.dataset.pid, b.dataset.aid);
+});
+
+/* ---------- 供应商操作 ---------- */
+async function toggleProvider(id, enabled) {
+  try {
+    await api('/api/providers/write', { method: 'POST', body: { id: id, enabled: !!enabled } });
+    toast((enabled ? '已启用 ' : '已禁用 ') + id, 'ok');
+    await loadProviders();
+    if (S.status) loadOverview();
+  } catch (e) {
+    toast('切换失败：' + e.message, 'err');
+    loadProviders(); // 回滚 UI
+  }
+}
+
+async function deleteProvider(id) {
+  if (!confirm('删除供应商 ' + id + ' 及其下所有账号？此操作会写进配置文件。')) return;
+  try {
+    await api('/api/providers/write?id=' + encodeURIComponent(id), { method: 'DELETE' });
+    toast('已删除 ' + id, 'ok');
+    S.expanded.delete(id);
+    if (S.editing === id) resetProviderForm();
+    await loadProviders();
+    loadOverview();
+  } catch (e) {
+    toast('删除失败：' + e.message, 'err');
+  }
+}
+
+function editProvider(id) {
+  const p = S.providers.find((x) => x.id === id);
+  if (!p) return;
+  S.editing = id;
+  el('provFormTitle').textContent = '编辑供应商：' + (p.name || p.id);
+  el('fPid').value = p.id;
+  el('fPid').disabled = true;           // id 是主键，不让改
+  el('fPname').value = p.name || '';
+  el('fPkind').value = p.kind || '';
+  el('fPbase').value = p.baseUrl || '';
+  el('fPkey').value = '';               // 脱敏值不回填，留空 = 不改
+  el('fPkey').placeholder = '留空表示不修改（现有 key 不回显）';
+  el('fPmodels').value = (p.models || []).join(', ');
+  el('btnProvCancel').hidden = false;
+  updateKindHint();
+  el('provFormCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function resetProviderForm() {
+  S.editing = null;
+  el('provFormTitle').textContent = '添加供应商';
+  el('fPid').value = '';
+  el('fPid').disabled = false;
+  el('fPname').value = '';
+  el('fPkind').value = '';
+  el('fPbase').value = '';
+  el('fPkey').value = '';
+  el('fPkey').placeholder = 'sk-... / 访问令牌';
+  el('fPmodels').value = '';
+  el('btnProvCancel').hidden = true;
+  updateKindHint();
+}
+
+el('btnProvCancel').addEventListener('click', resetProviderForm);
+
+el('btnProvSave').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const id = el('fPid').value.trim();
+  if (!id) { toast('供应商 id 不能为空', 'err'); el('fPid').focus(); return; }
+  const models = el('fPmodels').value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+  const body = {
+    id: id,
+    name: el('fPname').value.trim(),
+    kind: el('fPkind').value,
+    baseUrl: el('fPbase').value.trim(),
+    apiKey: el('fPkey').value.trim(),
+    models: models,
+  };
+  btn.disabled = true;
+  try {
+    const r = await api('/api/providers/write', { method: 'POST', body: body });
+    toast((r.created ? '已创建 ' : '已更新 ') + id, 'ok');
+    resetProviderForm();
+    await loadProviders();
+    loadOverview();
+  } catch (err) {
+    toast('保存失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* ---------- 账号操作 ---------- */
+async function toggleAccount(pid, aid, enabled) {
+  try {
+    await api('/api/accounts/write', {
+      method: 'POST',
+      body: { providerId: pid, accountId: aid, enabled: !!enabled },
+    });
+    toast((enabled ? '已启用 ' : '已禁用 ') + aid, 'ok');
+    await loadProviders();
+  } catch (e) {
+    toast('切换失败：' + e.message, 'err');
+    loadProviders();
+  }
+}
+
+async function deleteAccount(pid, aid) {
+  if (!confirm('删除账号 ' + aid + '？')) return;
+  try {
+    await api('/api/accounts/write?providerId=' + encodeURIComponent(pid) +
+      '&accountId=' + encodeURIComponent(aid), { method: 'DELETE' });
+    toast('已删除 ' + aid, 'ok');
+    await loadProviders();
+    loadOverview();
+  } catch (e) {
+    toast('删除失败：' + e.message, 'err');
+  }
+}
+
+el('btnAccountSave').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const pid = el('fAprov').value;
+  if (!pid) { toast('先选一个供应商', 'err'); return; }
+  const body = {
+    providerId: pid,
+    accountId: el('fAid').value.trim(),
+    name: el('fAname').value.trim(),
+    access: el('fAaccess').value.trim(),
+    refresh: el('fArefresh').value.trim(),
+    uid: el('fAuid').value.trim(),
+    domain: el('fAdomain').value.trim(),
+    realm: el('fArealm').value.trim(),
+  };
+  if (!body.access && !body.refresh) { toast('access 和 refresh 至少填一个', 'err'); return; }
+  btn.disabled = true;
+  try {
+    const r = await api('/api/accounts/write', { method: 'POST', body: body });
+    toast((r.created ? '已添加账号 ' : '已更新账号 ') + (r.accountId || ''), 'ok');
+    ['fAid', 'fAname', 'fAaccess', 'fArefresh', 'fAuid', 'fAdomain', 'fArealm'].forEach((k) => { el(k).value = ''; });
+    await loadProviders();
+    loadOverview();
+  } catch (err) {
+    toast('保存失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* =====================================================================
+   账号页整体加载（供应商列表 + 账号池健康）
+   ===================================================================== */
+async function loadAccountsTab() {
+  await loadProviders();
+  loadPool();
+}
+
+async function loadPool() {
+  const box = el('poolBox');
+  try {
+    const d = await api('/api/accounts');
+    const rows = d.accounts || [];
+    if (!rows.length) { box.innerHTML = '<div class="empty">还没有账号调用记录（首次请求后才会出现）</div>'; return; }
+    box.innerHTML = '<div class="tblwrap"><table class="tbl"><thead><tr>' +
+      '<th>账号</th><th>成功</th><th>失败</th><th>状态</th></tr></thead><tbody>' +
+      rows.map((r) => '<tr><td>' + esc(r.key) + '</td>' +
+        '<td class="num">' + esc(r.successes || 0) + '</td>' +
+        '<td class="num">' + esc(r.failures || 0) + '</td>' +
+        '<td>' + (r.cooling
+          ? '<span class="badge warn">冷却 ' + esc(r.coolRemainSec || 0) + ' 秒</span>'
+          : (r.lastFailure ? '<span class="badge err">' + esc(r.lastFailure) + '</span>' : '<span class="badge ok">正常</span>')) +
+        (r.lastUsedSec != null ? '<div class="dim" style="font-size:11px">' + esc(fmtAgo(r.lastUsedSec)) + '用过</div>' : '') +
+        '</td></tr>').join('') +
+      '</tbody></table></div>';
+  } catch (e) {
+    box.innerHTML = '<div class="err">读取失败：' + esc(e.message) + '</div>';
+  }
+}
+el('btnPool').addEventListener('click', loadPool);
+
+/* =====================================================================
+   登录流程（Trae / GitHub Copilot）
+   ===================================================================== */
+
+// 停止任何进行中的轮询
+function stopPoll() {
+  S.poll.gen++;
+  if (S.poll.timer) { clearTimeout(S.poll.timer); S.poll.timer = 0; }
+}
+
+// ---------- 系统提示词注入 ----------
+async function loadPrompt() {
+  const modeEl = el('promptMode'), textEl = el('promptText');
+  if (!modeEl || !textEl) return;
+  try {
+    const d = await api('/api/prompt');
+    modeEl.value = d.mode || 'passthrough';
+    textEl.value = d.inline || '';
+    el('promptLen').textContent = '（' + (textEl.value.length) + ' 字符）';
+  } catch (e) {
+    el('promptMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+  }
+}
+
+async function savePrompt() {
+  const mode = el('promptMode').value;
+  const inline = el('promptText').value;
+  if (mode !== 'passthrough' && !inline.trim()) {
+    el('promptMsg').innerHTML = '<span class="err">选了 ' + mode + ' 就必须填提示词正文</span>';
+    return;
+  }
+  try {
+    const d = await api('/api/prompt', { method: 'POST', body: { mode, inline } });
+    el('promptMsg').innerHTML = '<span class="ok">已保存（' + (d.length || 0) + ' 字符，mode=' + mode + '），下一个请求生效</span>';
+    toast('提示词已保存', 'ok');
+    el('promptLen').textContent = '（' + inline.length + ' 字符）';
+  } catch (e) {
+    el('promptMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+    toast(e.message, 'err');
+  }
+}
+
+async function presetM0SS() {
+  if (!confirm('用内置的 M0SS 人设覆盖当前提示词？（模式会设成 inject）')) return;
+  try {
+    const d = await api('/api/prompt/preset', { method: 'POST', body: { name: 'm0ss' } });
+    await loadPrompt();
+    el('promptMsg').innerHTML = '<span class="ok">已写入 M0SS 人设（' + (d.length || 0) + ' 字符）</span>';
+    toast('已写入 M0SS 人设', 'ok');
+  } catch (e) {
+    el('promptMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+    toast(e.message, 'err');
+  }
+}
+
+// ---------- 客户端 API Key ----------
+async function loadKeys() {
+  const box = el('keyList');
+  if (!box) return;
+  try {
+    const d = await api('/api/keys');
+    const rows = d.keys || [];
+    let html = '<div class="kv"><span>主网关口令（可直接用）</span><code>' + esc(d.primary || '-') + '</code></div>';
+    if (!rows.length) {
+      html += '<div class="dim" style="font-size:12px;margin-top:6px">还没有额外生成的 key。</div>';
+    } else {
+      html += '<div style="margin-top:8px">';
+      rows.forEach(k => {
+        html += '<div class="kv" style="align-items:center">' +
+          '<span>' + esc(k.note || k.id) + ' <code class="dim">' + esc(k.preview) + '</code>' +
+          (k.enabled ? '' : ' <span class="err">(已停用)</span>') + '</span>' +
+          '<span>' +
+            '<button class="btn sm" data-keytoggle="' + esc(k.id) + '" data-on="' + (k.enabled ? '0' : '1') + '">' +
+              (k.enabled ? '停用' : '启用') + '</button> ' +
+            '<button class="btn sm danger" data-keydel="' + esc(k.id) + '">删除</button>' +
+          '</span></div>';
+      });
+      html += '</div>';
+    }
+    box.innerHTML = html;
+    box.querySelectorAll('[data-keytoggle]').forEach(b => {
+      b.addEventListener('click', async () => {
+        const enabled = b.dataset.on === '1';
+        try {
+          await api('/api/keys/toggle', { method: 'POST', body: { id: b.dataset.keytoggle, enabled } });
+          toast(enabled ? '已启用' : '已停用', 'ok');
+          loadKeys();
+        } catch (e) { toast(e.message, 'err'); }
+      });
+    });
+    box.querySelectorAll('[data-keydel]').forEach(b => {
+      b.addEventListener('click', async () => {
+        if (!confirm('确定删除这把 key？用它的客户端会立刻失效。')) return;
+        try {
+          await api('/api/keys?id=' + encodeURIComponent(b.dataset.keydel), { method: 'DELETE' });
+          toast('已删除', 'ok');
+          loadKeys();
+        } catch (e) { toast(e.message, 'err'); }
+      });
+    });
+  } catch (e) {
+    box.innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+  }
+}
+
+async function createKey() {
+  const note = prompt('给这把 key 起个备注（例如：平板 / 电脑）', '');
+  if (note === null) return;
+  try {
+    const d = await api('/api/keys', { method: 'POST', body: { note } });
+    el('keyNewBox').innerHTML =
+      '<div class="card" style="border-color:#3fb950;margin:0">' +
+        '<div class="ok" style="font-size:12px;margin-bottom:6px">新 Key 已生成（只显示这一次，请立刻复制）</div>' +
+        '<div class="code-big" style="font-size:12px;word-break:break-all">' + esc(d.key) + '</div>' +
+        '<div class="btnrow" style="margin-top:8px"><button class="btn sm" id="btnCopyNewKey">复制 Key</button></div>' +
+      '</div>';
+    const cp = el('btnCopyNewKey');
+    if (cp) cp.addEventListener('click', () => copyText(d.key));
+    loadKeys();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+function flowMsg(html) { el('flowMsg').innerHTML = html; }
+
+// WorkBuddy：向官方申请 state + authUrl → 用户手机号登录 → 轮询换 token
+async function startWorkBuddyFlow() {
+  stopPoll();
+  const gen = S.poll.gen;
+  el('flowBox').innerHTML = '<div class="dim" style="font-size:12px">正在向 WorkBuddy 申请登录态…</div>';
+  try {
+    const d = await api('/api/auth/workbuddy/start', { method: 'POST', body: { provider: 'workbuddy' } });
+    if (gen !== S.poll.gen) return;
+    const deadlineAt = d.deadline ? d.deadline * 1000 : Date.now() + 300000;
+    S.poll.deadlineAt = deadlineAt;
+    S.poll.startedAt = Date.now();
+    el('flowBox').innerHTML =
+      '<div class="step">1. 用浏览器打开下面的地址，用手机号登录 WorkBuddy：</div>' +
+      '<div style="margin:6px 0"><a href="' + esc(d.url) + '" target="_blank" rel="noopener noreferrer">' + esc(d.url) + '</a></div>' +
+      '<div class="step">2. 登录完成后回到这里，页面会自动检测到并写入账号。</div>' +
+      '<div class="btnrow" style="margin-top:4px">' +
+        '<button class="btn sm" id="btnCopyWb">复制链接</button>' +
+        '<button class="btn sm danger" id="btnStopFlow">取消</button>' +
+      '</div>' +
+      '<div id="flowMsg" class="dim">等待授权…（有效期到 ' + esc(fmtDate(Math.floor(deadlineAt / 1000))) + '）</div>';
+    const cp = el('btnCopyWb');
+    if (cp) cp.addEventListener('click', () => copyText(d.url));
+    bindStop();
+    schedulePoll('workbuddy', d, gen, 3000);
+  } catch (e) {
+    el('flowBox').innerHTML = '<div class="err" style="font-size:12px">创建登录流失败：' + esc(e.message) + '</div>';
+    toast(e.message, 'err');
+  }
+}
+
+// Trae：拿授权 URL → 用户浏览器打开 → 每 3 秒查一次
+async function startTraeFlow() {
+  stopPoll();
+  const gen = S.poll.gen;
+  el('flowBox').innerHTML = '<div class="dim" style="font-size:12px">正在创建 Trae 登录流…</div>';
+  try {
+    const d = await api('/api/auth/trae/start', { method: 'POST', body: '{}' });
+    if (gen !== S.poll.gen) return;
+    const deadlineAt = d.deadline ? d.deadline * 1000 : Date.now() + 300000;
+    S.poll.deadlineAt = deadlineAt;
+    S.poll.startedAt = Date.now();
+    el('flowBox').innerHTML =
+      '<div class="step">1. 用浏览器打开下面的授权地址，完成 Trae 登录授权：</div>' +
+      '<div style="margin:6px 0"><a href="' + esc(d.url) + '" target="_blank" rel="noopener noreferrer">' + esc(d.url) + '</a></div>' +
+      '<div class="btnrow" style="margin-top:4px">' +
+        '<button class="btn sm" id="btnCopyTrae">复制链接</button>' +
+        '<button class="btn sm danger" id="btnStopFlow">取消</button>' +
+      '</div>' +
+      '<div id="flowMsg" class="dim">等待授权…（有效期到 ' + esc(fmtDate(Math.floor(deadlineAt / 1000))) + '）</div>';
+    const cp = el('btnCopyTrae');
+    if (cp) cp.addEventListener('click', () => copyText(d.url));
+    bindStop();
+    schedulePoll('trae', d, gen, 3000);
+  } catch (e) {
+    el('flowBox').innerHTML = '<div class="err" style="font-size:12px">创建登录流失败：' + esc(e.message) + '</div>';
+    toast(e.message, 'err');
+  }
+}
+
+// GitHub Copilot：设备码流程
+async function startCopilotFlow() {
+  stopPoll();
+  const gen = S.poll.gen;
+  el('flowBox').innerHTML = '<div class="dim" style="font-size:12px">正在向 GitHub 申请设备码…</div>';
+  try {
+    const d = await api('/api/auth/github-copilot/start', { method: 'POST', body: '{}' });
+    if (gen !== S.poll.gen) return;
+    const deadlineAt = Date.now() + (d.expiresInSec || 900) * 1000;
+    S.poll.deadlineAt = deadlineAt;
+    S.poll.startedAt = Date.now();
+    el('flowBox').innerHTML =
+      '<div class="step">1. 打开 <a href="' + esc(d.verificationUri) + '" target="_blank" rel="noopener noreferrer">' +
+        esc(d.verificationUri) + '</a></div>' +
+      '<div class="step">2. 输入下面这个设备码并授权 GitHub Copilot：</div>' +
+      '<div class="code-big">' + esc(d.userCode) + '</div>' +
+      '<div class="btnrow" style="margin-top:4px">' +
+        '<button class="btn sm" id="btnCopyCode">复制设备码</button>' +
+        (d.verificationUriComplete
+          ? '<a class="btn sm" style="text-decoration:none;display:inline-block;line-height:1.4" href="' +
+            esc(d.verificationUriComplete) + '" target="_blank" rel="noopener noreferrer">一键授权链接</a>'
+          : '') +
+        '<button class="btn sm danger" id="btnStopFlow">取消</button>' +
+      '</div>' +
+      '<div id="flowMsg" class="dim">等待你在 GitHub 上确认…</div>';
+    const cp = el('btnCopyCode');
+    if (cp) cp.addEventListener('click', () => copyText(d.userCode));
+    bindStop();
+    // 服务端 poll 是长轮询（最多 60 秒），所以间隔取 GitHub 给的 intervalMs
+    schedulePoll('copilot', d, gen, Math.max(3000, d.intervalMs || 5000));
+  } catch (e) {
+    el('flowBox').innerHTML = '<div class="err" style="font-size:12px">申请设备码失败：' + esc(e.message) + '</div>';
+    toast(e.message, 'err');
+  }
+}
+
+/* =====================================================================
+   第二批供应商登录（8 家统一两段式：/api/auth/<vendor>/start + /poll）
+   ===================================================================== */
+
+// vendor → 面板上的显示名
+const AUTH_LABELS = {
+  antigravity: 'Antigravity', catpaw: 'CatPaw', cline: 'Cline', codex: 'Codex',
+  minimax: 'MiniMax', qoder: 'Qoder', raccoon: '小浣熊', wenxin: '文心',
+};
+
+function authLabel(v) { return AUTH_LABELS[v] || v; }
+
+async function startAuthFlow(vendor) {
+  stopPoll();
+  const gen = S.poll.gen;
+  const label = authLabel(vendor);
+  el('flowBox').innerHTML = '<div class="dim" style="font-size:12px">正在向 ' + esc(label) + ' 申请登录…</div>';
+  try {
+    const d = await api('/api/auth/' + encodeURIComponent(vendor) + '/start', { method: 'POST', body: '{}' });
+    if (gen !== S.poll.gen) return;
+    const deadlineAt = d.deadline ? d.deadline * 1000 : Date.now() + 600000;
+    S.poll.deadlineAt = deadlineAt;
+    S.poll.startedAt = Date.now();
+    el('flowBox').innerHTML = renderAuthStart(vendor, d, deadlineAt);
+    bindAuthExtras(vendor, d, gen);
+    schedulePoll(vendor, d, gen, Math.max(2000, d.intervalMs || 3000));
+  } catch (e) {
+    el('flowBox').innerHTML = '<div class="err" style="font-size:12px">创建 ' + esc(label) +
+      ' 登录流失败：' + esc(e.message) + '</div>';
+    toast(e.message, 'err');
+  }
+}
+
+// 按后端返回的形状自适应渲染：有 userCode 就大字显示，有 url 就给链接，
+// 需要粘贴（needsCode / needsCookie）就多给一个输入框。
+function renderAuthStart(vendor, d, deadlineAt) {
+  let html = '';
+  if (d.userCode) {
+    const uri = d.verificationUri || d.url || '';
+    html += '<div class="step">1. 打开 <a href="' + esc(uri) + '" target="_blank" rel="noopener noreferrer">' +
+      esc(uri) + '</a></div>' +
+      '<div class="step">2. 输入下面这个设备码并授权 ' + esc(authLabel(vendor)) + '：</div>' +
+      '<div class="code-big">' + esc(d.userCode) + '</div>' +
+      '<div class="btnrow" style="margin-top:4px">' +
+        '<button class="btn sm" id="btnAuthCopyCode">复制设备码</button>' +
+        (d.verificationUriComplete
+          ? '<a class="btn sm" style="text-decoration:none;display:inline-block;line-height:1.4" href="' +
+            esc(d.verificationUriComplete) + '" target="_blank" rel="noopener noreferrer">一键授权</a>'
+          : '') +
+        '<button class="btn sm danger" id="btnStopFlow">取消</button>' +
+      '</div>';
+  } else if (d.url) {
+    html += '<div class="step">1. 用浏览器打开下面的授权地址，完成 ' + esc(authLabel(vendor)) + ' 登录：</div>' +
+      '<div style="margin:6px 0;word-break:break-all"><a href="' + esc(d.url) + '" target="_blank" rel="noopener noreferrer">' +
+      esc(d.url) + '</a></div>' +
+      '<div class="btnrow" style="margin-top:4px">' +
+        '<button class="btn sm" id="btnAuthCopyUrl">复制链接</button>' +
+        '<button class="btn sm danger" id="btnStopFlow">取消</button>' +
+      '</div>';
+  } else {
+    html += '<div class="btnrow" style="margin-top:4px">' +
+      '<button class="btn sm danger" id="btnStopFlow">取消</button></div>';
+  }
+  if (d.hint) {
+    html += '<div class="dim" style="font-size:12px;margin-top:6px">' + esc(d.hint) + '</div>';
+  }
+  if (d.needsCode) {
+    html += '<div class="step" style="margin-top:8px">没自动完成？把浏览器地址栏里的完整回调链接（或 code）贴到这里：</div>' +
+      '<input id="authCodeInput" placeholder="http://localhost:...?code=... 或裸 code" ' +
+      'autocomplete="off" autocapitalize="off" spellcheck="false">' +
+      '<div class="btnrow" style="margin-top:6px"><button class="btn sm" id="btnAuthSubmitCode">提交授权码</button></div>';
+  }
+  if (d.needsCookie) {
+    html += '<div class="step" style="margin-top:8px">登录百度后，把 chat.baidu.com 的整条 Cookie 贴进来：</div>' +
+      '<input id="authCookieInput" placeholder="BDUSS=...; STOKEN=...; BAIDUID=..." ' +
+      'autocomplete="off" autocapitalize="off" spellcheck="false">' +
+      '<div class="btnrow" style="margin-top:6px"><button class="btn sm" id="btnAuthSubmitCookie">提交 Cookie</button></div>';
+  }
+  html += '<div id="flowMsg" class="dim" style="margin-top:8px">等待授权…（有效期到 ' +
+    esc(fmtDate(Math.floor(deadlineAt / 1000))) + '）</div>';
+  return html;
+}
+
+function bindAuthExtras(vendor, d, gen) {
+  const c1 = el('btnAuthCopyCode');
+  if (c1) c1.addEventListener('click', () => copyText(d.userCode));
+  const c2 = el('btnAuthCopyUrl');
+  if (c2) c2.addEventListener('click', () => copyText(d.url));
+  const c3 = el('btnAuthSubmitCode');
+  if (c3) c3.addEventListener('click', () => {
+    const box = el('authCodeInput');
+    const v = box ? String(box.value || '').trim() : '';
+    if (!v) { toast('请先粘贴回调链接或 code', 'err'); return; }
+    flowMsg('<span class="dim">正在用你贴回来的授权码换票…</span>');
+    pollOnce(vendor, d, gen, { code: v });
+  });
+  const c4 = el('btnAuthSubmitCookie');
+  if (c4) c4.addEventListener('click', () => {
+    const box = el('authCookieInput');
+    const v = box ? String(box.value || '').trim() : '';
+    if (!v) { toast('请先粘贴 Cookie', 'err'); return; }
+    flowMsg('<span class="dim">正在提交 Cookie…</span>');
+    pollOnce(vendor, d, gen, { cookie: v });
+  });
+  bindStop();
+}
+
+function bindStop() {
+  const b = el('btnStopFlow');
+  if (!b) return;
+  b.addEventListener('click', () => {
+    stopPoll();
+    el('flowBox').innerHTML = '<div class="dim" style="font-size:12px">已取消（服务端的登录流会在有效期后自行过期）</div>';
   });
 }
 
-async function refresh() {
+// 复制到剪贴板（http 环境下 navigator.clipboard 可能不可用，退回 textarea 方案）
+async function copyText(t) {
   try {
-    const s = await api('/api/status');
-    $('#status').innerHTML = [
-      ['运行时长', fmtDur(s.uptimeSec)],
-      ['请求数', s.requests],
-      ['错误数', s.errors],
-      ['供应商', s.providers],
-      ['账号', s.accounts],
-      ['模型', s.models],
-    ].map(([k, v]) => `<div class="row"><span>${k}</span><span>${v}</span></div>`).join('');
-    $('#endpoint').textContent = location.host + '/v1';
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(t);
+      toast('已复制', 'ok');
+      return;
+    }
+    const ta = document.createElement('textarea');
+    ta.value = t;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+    toast('已复制', 'ok');
   } catch (e) {
-    $('#status').innerHTML = `<span class="err">${e.message}</span>`;
-  }
-  try {
-    const m = await api('/api/models');
-    const list = m.data || [];
-    $('#modelCount').textContent = `(${list.length})`;
-    $('#models').innerHTML = list.length
-      ? list.map(x => `<span class="tag">${x.id}</span>`).join('')
-      : '<span class="dim">还没有模型，先到配置文件里加供应商</span>';
-  } catch (e) {
-    $('#models').innerHTML = `<span class="err">${e.message}</span>`;
+    toast('复制失败，请手动长按选择', 'err');
   }
 }
 
-function fmtDur(sec) {
-  if (!sec && sec !== 0) return '-';
-  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
-  if (d) return `${d}天${h}小时`;
-  if (h) return `${h}小时${m}分`;
-  return `${m}分`;
+function schedulePoll(kind, start, gen, delay) {
+  if (gen !== S.poll.gen) return;
+  S.poll.timer = setTimeout(() => pollOnce(kind, start, gen), delay);
 }
 
-$('#btnCheckin').addEventListener('click', async (e) => {
-  const btn = e.target; btn.disabled = true;
-  $('#checkinResult').innerHTML = '<span class="dim">正在签到…</span>';
+async function pollOnce(kind, start, gen, extra) {
+  if (gen !== S.poll.gen) return;
+  const waited = Math.floor((Date.now() - S.poll.startedAt) / 1000);
+  if (Date.now() > S.poll.deadlineAt) {
+    flowMsg('<span class="err">登录流已超时（' + waited + ' 秒），请重新发起</span>');
+    return;
+  }
+  let retryDelay = 3000;
   try {
-    const d = await api('/api/workbuddy/checkin', { method: 'POST', body: '{}' });
-    const parts = [`成功 ${d.succeeded || 0}`, `已签 ${d.already || 0}`, `失败 ${d.failed || 0}`];
-    if (d.skipped) parts.push(`跳过 ${d.skipped}`);
-    const cls = (d.failed || 0) > 0 ? 'warn' : 'ok';
-    $('#checkinResult').innerHTML = `<span class="${cls}">${parts.join(' · ')}</span>`;
-    $('#checkinDetail').style.display = 'block';
-    $('#checkinDetail').textContent = JSON.stringify(d.results || d, null, 2);
-  } catch (err) {
-    $('#checkinResult').innerHTML = `<span class="err">${err.message}</span>`;
-  } finally { btn.disabled = false; }
+    let d;
+    if (kind === 'trae') {
+      d = await api('/api/auth/trae/poll?flowId=' + encodeURIComponent(start.flowId));
+      retryDelay = 3000;
+    } else if (kind === 'workbuddy') {
+      d = await api('/api/auth/workbuddy/poll?flowId=' + encodeURIComponent(start.flowId));
+      retryDelay = 3000;
+    } else if (AUTH_LABELS[kind]) {
+      // 第二批 8 家：统一 GET /api/auth/<vendor>/poll?flowId=
+      // extra.code / extra.cookie 是用户手动粘贴的兜底通道，每次只带一次。
+      let u = '/api/auth/' + encodeURIComponent(kind) + '/poll?flowId=' + encodeURIComponent(start.flowId);
+      if (extra && extra.code) u += '&code=' + encodeURIComponent(extra.code);
+      if (extra && extra.cookie) u += '&cookie=' + encodeURIComponent(extra.cookie);
+      d = await api(u);
+      retryDelay = Math.max(2000, start.intervalMs || 3000);
+    } else {
+      d = await api('/api/auth/github-copilot/poll', { method: 'POST', body: { flowId: start.flowId } });
+      retryDelay = Math.max(3000, start.intervalMs || 5000);
+    }
+    if (gen !== S.poll.gen) return;
+    const st = d.status || '';
+    if (st === 'done') {
+      // 先停掉轮询：可能还有一发在飞的 poll，不停的话它拿到 404 会把成功提示盖掉
+      stopPoll();
+      flowMsg('<span class="ok">登录成功：' + esc(d.account || '') + ' 已写入 ' + esc(d.provider || '') +
+        '（' + esc(d.hint || '') + '）</span>');
+      toast('登录成功，账号已写入配置', 'ok');
+      await loadProviders();
+      loadOverview();
+      return;
+    }
+    if (st === 'failed' || st === 'expired' || st === 'closed') {
+      // 第二批 8 家：失败就停掉轮询，免得一发在飞的 pending 把错误提示盖回「等待中」
+      // （用户还想再试可以直接点「提交授权码」或重新发起）
+      if (AUTH_LABELS[kind]) stopPoll();
+      flowMsg('<span class="err">登录失败：' + esc(d.error || st) + '</span>');
+      toast('登录失败：' + (d.error || st), 'err');
+      return;
+    }
+    // 需要人工补一步（贴回调链接 / 贴 Cookie）：只更新提示行，保住输入框里已粘的内容
+    if (st === 'need_code' || st === 'need_cookie') {
+      flowMsg('<span class="warn">' + esc(d.hint || (st === 'need_cookie' ? '需要粘贴 Cookie' : '需要粘贴回调链接')) + '</span>');
+      schedulePoll(kind, start, gen, retryDelay);
+      return;
+    }
+    // pending / slow_down
+    flowMsg('<span class="dim">等待你在浏览器完成授权…（已等待 ' + waited + ' 秒' +
+      (st === 'slow_down' ? '，上游要求放慢轮询' : '') +
+      (d.hint ? '；' + esc(d.hint) : '') + '）</span>');
+    if (st === 'slow_down') retryDelay += 5000;
+    schedulePoll(kind, start, gen, retryDelay);
+  } catch (e) {
+    if (gen !== S.poll.gen) return;
+    // 单次失败不放弃（网络抖动很常见），继续轮询并在界面提示
+    flowMsg('<span class="warn">查询状态出错：' + esc(e.message) + '，' + Math.round(retryDelay / 1000) + ' 秒后重试…</span>');
+    schedulePoll(kind, start, gen, retryDelay);
+  }
+}
+
+el('btnSavePrompt').addEventListener('click', savePrompt);
+el('btnPresetM0SS').addEventListener('click', presetM0SS);
+el('btnReloadPrompt').addEventListener('click', loadPrompt);
+el('promptText').addEventListener('input', () => { el('promptLen').textContent = '（' + el('promptText').value.length + ' 字符）'; });
+el('btnNewKey').addEventListener('click', createKey);
+el('btnRefreshKeys').addEventListener('click', loadKeys);
+el('btnWorkBuddyLogin').addEventListener('click', startWorkBuddyFlow);
+el('btnTraeLogin').addEventListener('click', startTraeFlow);
+el('btnCopilotLogin').addEventListener('click', startCopilotFlow);
+// 第二批 8 家（antigravity / catpaw / cline / codex / minimax / qoder / raccoon / wenxin）：
+// 按钮上的 data-authflow 直接就是 vendor 名
+document.querySelectorAll('[data-authflow]').forEach((b) => {
+  b.addEventListener('click', () => startAuthFlow(b.getAttribute('data-authflow')));
 });
 
-$('#btnStatus').addEventListener('click', async (e) => {
-  const btn = e.target; btn.disabled = true;
+/* =====================================================================
+   4. 用量
+   ===================================================================== */
+async function loadUsage() {
+  const box = el('usageBox');
   try {
-    const d = await api('/api/workbuddy/checkin-status');
-    $('#checkinDetail').style.display = 'block';
-    $('#checkinDetail').textContent = JSON.stringify(d, null, 2);
-  } catch (err) {
-    $('#checkinResult').innerHTML = `<span class="err">${err.message}</span>`;
-  } finally { btn.disabled = false; }
+    const d = await api('/api/usage');
+    const rows = (d.usage || []).slice().sort((a, b) => (b.requests || 0) - (a.requests || 0));
+    if (!rows.length) {
+      box.innerHTML = '<div class="empty">还没有调用记录（重启网关会清空计数）</div>';
+      return;
+    }
+    let tReq = 0, tErr = 0, tIn = 0, tOut = 0;
+    const body = rows.map((r) => {
+      const key = String(r.key || '');
+      const i = key.indexOf('/');
+      const prov = i >= 0 ? key.slice(0, i) : key;
+      const model = i >= 0 ? key.slice(i + 1) : '';
+      tReq += r.requests || 0; tErr += r.errors || 0;
+      tIn += r.inTokens || 0; tOut += r.outTokens || 0;
+      return '<tr>' +
+        '<td>' + esc(prov) + '<div class="dim" style="font-size:11px">' + esc(model) + '</div></td>' +
+        '<td class="num">' + fmtNum(r.requests) + '</td>' +
+        '<td class="num">' + (r.errors ? '<span class="err">' + fmtNum(r.errors) + '</span>' : '0') + '</td>' +
+        '<td class="num">' + fmtNum(r.inTokens) + '</td>' +
+        '<td class="num">' + fmtNum(r.outTokens) + '</td>' +
+        '<td>' + (r.lastAt ? esc(fmtDate(r.lastAt)) + '<div class="dim" style="font-size:11px">' +
+          esc(fmtAgo(Math.floor(Date.now() / 1000) - r.lastAt)) + '</div>' : '-') + '</td>' +
+        '</tr>';
+    }).join('');
+    box.innerHTML = '<div class="tblwrap"><table class="tbl"><thead><tr>' +
+      '<th>供应商 / 模型</th><th>请求</th><th>错误</th><th>输入 token</th><th>输出 token</th><th>最后调用</th>' +
+      '</tr></thead><tbody>' + body +
+      '<tr><td><b>合计</b></td><td class="num"><b>' + fmtNum(tReq) + '</b></td>' +
+      '<td class="num"><b>' + fmtNum(tErr) + '</b></td><td class="num"><b>' + fmtNum(tIn) + '</b></td>' +
+      '<td class="num"><b>' + fmtNum(tOut) + '</b></td><td>-</td></tr>' +
+      '</tbody></table></div>';
+  } catch (e) {
+    box.innerHTML = '<div class="err" style="margin-top:8px">读取失败：' + esc(e.message) + '</div>';
+    toast(e.message, 'err');
+  }
+}
+
+el('btnUsageRefresh').addEventListener('click', loadUsage);
+
+el('btnUsageReset').addEventListener('click', async () => {
+  if (!confirm('清空所有用量计数？只影响面板统计，不影响配置。')) return;
+  try {
+    await api('/api/usage/reset', { method: 'POST', body: '{}' });
+    toast('已重置用量计数', 'ok');
+    loadUsage();
+  } catch (e) {
+    toast('重置失败：' + e.message, 'err');
+  }
 });
 
-refresh();
-setInterval(refresh, 15000);
+/* =====================================================================
+   5. 设置
+   ===================================================================== */
+async function loadSettings() {
+  el('cfgEndpoint').textContent = location.origin + '/v1';
+  try {
+    const cfg = await api('/api/config');
+    S.config = cfg;
+    const srv = cfg.server || {};
+    el('cfgListen').textContent = (srv.host || '127.0.0.1') + ':' + (srv.port || 3425);
+    el('cfgKeyOrigin').textContent = srv.authKeyOrigin === 'first-run-random'
+      ? '首次启动自动生成（配置文件里能看到明文）' : (srv.authKey ? '配置文件里已设置' : '未设置（任何请求都不校验）');
+    el('fHost').value = srv.host || '';
+    el('fPort').value = srv.port || '';
+  } catch (e) {
+    el('cfgListen').textContent = '-';
+    el('cfgKeyOrigin').textContent = '读取失败：' + e.message;
+    toast(e.message, 'err');
+  }
+  // 配置文件路径来自 /api/status
+  try {
+    const st = S.status || await api('/api/status');
+    S.status = st;
+    el('cfgPath').textContent = st.configPath || '-';
+  } catch (e) {
+    el('cfgPath').textContent = '读取失败：' + e.message;
+  }
+}
+
+// 把改动合并进脱敏配置后整体回传。
+// 注意：脱敏视图里的 apiKey / access / refresh 都是掩码串，后端会识别并保留真实值；
+// 口令若本次不改就干脆不回传，避免误写。
+async function saveConfig(patch) {
+  const base = S.config || await api('/api/config');
+  const cfg = JSON.parse(JSON.stringify(base));
+  cfg.server = cfg.server || {};
+  Object.keys(patch).forEach((k) => { if (patch[k] !== undefined) cfg.server[k] = patch[k]; });
+  if (patch.authKey === undefined) delete cfg.server.authKey;
+  const r = await api('/api/config', { method: 'POST', body: cfg });
+  S.config = cfg;
+  return r;
+}
+
+el('btnSaveKey').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const v = el('fNewKey').value.trim();
+  if (!v) { toast('新口令为空：留空表示不修改', 'warn'); return; }
+  btn.disabled = true;
+  try {
+    await saveConfig({ authKey: v });
+    setKey(v, false);
+    el('fNewKey').value = '';
+    toast('网关口令已更新', 'ok');
+    loadSettings();
+  } catch (err) {
+    toast('保存失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+el('btnClearKey').addEventListener('click', () => {
+  setKey('', false);
+  toast('已清除本机保存的口令', 'ok');
+});
+
+el('btnSaveListen').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const host = el('fHost').value.trim();
+  const portRaw = el('fPort').value.trim();
+  const port = portRaw ? parseInt(portRaw, 10) : 0;
+  if (portRaw && (!port || port < 1 || port > 65535)) { toast('端口要是 1-65535 的数字', 'err'); return; }
+  btn.disabled = true;
+  try {
+    const patch = {};
+    if (host) patch.host = host;
+    if (port) patch.port = port;
+    if (!Object.keys(patch).length) { toast('没填要改的内容', 'warn'); return; }
+    const r = await saveConfig(patch);
+    toast(r.restartNeeded ? '已保存，端口变更需要重启网关才生效' : '已保存监听设置', r.restartNeeded ? 'warn' : 'ok');
+    loadSettings();
+  } catch (err) {
+    toast('保存失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* =====================================================================
+   启动
+   ===================================================================== */
+renderKindSelect();
+switchTab('overview');
+
+// 总览每 15 秒自动刷新（只在总览页且页面可见时）
+setInterval(() => {
+  if (S.tab === 'overview' && document.visibilityState === 'visible') loadOverview();
+}, 15000);
 </script>
 </body>
 </html>
