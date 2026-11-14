@@ -1,0 +1,267 @@
+{
+  "_说明": "All In Go 版配置。providers 里每条填上自己的 key 就能用；kind=openai 走标准兼容协议，kind=anthropic 走 Messages 协议，kind=workbuddy 是腾讯 WorkBuddy。models 是暴露给客户端用的模型名（写成 provider/model 调用）。",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 3425,
+    "authKey": ""
+  },
+  "providers": [
+    {
+      "id": "deepseek",
+      "name": "DeepSeek 官方",
+      "kind": "openai",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "apiKey": "",
+      "models": [
+        "deepseek-chat",
+        "deepseek-reasoner"
+      ]
+    },
+    {
+      "id": "siliconflow",
+      "name": "硅基流动",
+      "kind": "openai",
+      "baseUrl": "https://api.siliconflow.cn/v1",
+      "apiKey": "",
+      "models": [
+        "deepseek-ai/DeepSeek-V3",
+        "Qwen/Qwen2.5-72B-Instruct"
+      ]
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "kind": "openai",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKey": "",
+      "models": [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "o3-mini"
+      ]
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic Claude",
+      "kind": "anthropic",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "apiKey": "",
+      "models": [
+        "claude-sonnet-4-5",
+        "claude-opus-4-1"
+      ]
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "kind": "openai",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "",
+      "models": [
+        "anthropic/claude-sonnet-4.5",
+        "google/gemini-2.5-pro"
+      ]
+    },
+    {
+      "id": "tencent",
+      "name": "腾讯混元",
+      "kind": "openai",
+      "baseUrl": "https://api.hunyuan.cloud.tencent.com/v1",
+      "apiKey": "",
+      "models": [
+        "hunyuan-turbos-latest"
+      ]
+    },
+    {
+      "id": "zcode",
+      "name": "智谱 GLM Coding",
+      "kind": "openai",
+      "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+      "apiKey": "",
+      "models": [
+        "glm-5.3",
+        "glm-4.6"
+      ]
+    },
+    {
+      "id": "agentmore",
+      "name": "AgentMore（智谱企业）",
+      "kind": "openai",
+      "baseUrl": "https://agentmore.chatglm.cn/api/v1",
+      "apiKey": "",
+      "models": [
+        "glm-4-plus"
+      ]
+    },
+    {
+      "id": "meoo",
+      "name": "Meoo（阿里秒悟）",
+      "kind": "openai",
+      "baseUrl": "https://meoo.com/api/v1",
+      "apiKey": "",
+      "models": [
+        "qwen-max"
+      ]
+    },
+    {
+      "id": "runable",
+      "name": "Runable",
+      "kind": "openai",
+      "baseUrl": "https://api.runable.com/v1",
+      "apiKey": "",
+      "models": [
+        "runable-default"
+      ]
+    },
+    {
+      "id": "dangbei",
+      "name": "当贝 AI",
+      "kind": "openai",
+      "baseUrl": "https://ai.dangbei.com/api/v1",
+      "apiKey": "",
+      "models": [
+        "deepseek-v3"
+      ]
+    },
+    {
+      "id": "tabbit",
+      "name": "Tabbit",
+      "kind": "openai",
+      "baseUrl": "https://api.tabbit.ai/v1",
+      "apiKey": "",
+      "models": [
+        "tabbit-fast"
+      ]
+    },
+    {
+      "id": "cline",
+      "name": "Cline",
+      "kind": "openai",
+      "baseUrl": "https://api.cline.bot/api/v1",
+      "apiKey": "",
+      "models": [
+        "anthropic/claude-sonnet-4.5"
+      ]
+    },
+    {
+      "id": "workbuddy",
+      "name": "WorkBuddy（腾讯，登录态）",
+      "kind": "workbuddy",
+      "baseUrl": "https://copilot.tencent.com/v1",
+      "accounts": [],
+      "models": [
+        "glm-5.3",
+        "deepseek-v4.1-flash",
+        "hy3"
+      ]
+    },
+    {
+      "id": "workbuddy-ai",
+      "name": "WorkBuddy 国际版",
+      "kind": "workbuddy",
+      "baseUrl": "https://www.workbuddy.ai/v1",
+      "accounts": [],
+      "models": [
+        "glm-5.3",
+        "deepseek-v4.1-flash"
+      ]
+    },
+    {
+      "id": "deepseek-web",
+      "name": "DeepSeek 网页版（登录态）",
+      "_说明": "kind=deepseek-web 走 chat.deepseek.com 的私有协议（completion 端点 + PoW 挑战 + patch 流），请求体由网关摊平成 prompt，响应转回标准 chunk。accounts[].access 填浏览器 localStorage 里的 userToken。多轮对话请让客户端带上 prompt_cache_key 或 user 字段，网关按它缓存 chat_session_id/parent_message_id 复用同一条上游会话（30 分钟无活动即重建）。",
+      "kind": "deepseek-web",
+      "baseUrl": "https://chat.deepseek.com",
+      "accounts": [],
+      "models": [
+        "deepseek-chat",
+        "deepseek-reasoner"
+      ]
+    },
+    {
+      "id": "trae",
+      "name": "Trae（登录态）",
+      "_说明": "kind=trae 走 Trae 自己的聊天端点（/api/agent/v3/llm_utils_chat），请求体由网关自动翻译；models 填 Trae 侧的模型配置名。accounts 用面板的 Trae 登录流程生成（带 deviceId/machineId，缺了会被判设备非法）。可选 headers：X-Allin-Function（chat_v3/solo_agent/solo_coder，默认 chat_v3）、X-Allin-Context-Window（模型上下文窗口，填了才会下发 user_message_context）。",
+      "kind": "trae",
+      "baseUrl": "https://trae-api-cn.mchost.guru",
+      "accounts": [],
+      "models": []
+    },
+    {
+      "id": "qoder_cn",
+      "name": "Qoder 国内站（登录态）",
+      "_说明": "kind=qoder 走 Qoder 国内站的 agent 通道：请求体由网关重排成它的信封（business/parameters/model_config，user 回合带 contents），再套一层自定义 base64，头是 COSY 签名。accounts[].access 填 jobToken（或 deviceToken），accounts[].machineId 必填（缺了网关会直接报错），accounts[].uid 填 userinfo 的 uid，email 可留空。models 填 Qoder 模型目录里的 key，可在面板同步模型后照抄；模型 key 会兜底成请求体里的 model，要换 key 也可以给这条 provider 配 headers：{\"X-Model-Key\":\"真实key\"}。baseUrl 不用填（端点固定）。",
+      "kind": "qoder",
+      "baseUrl": "https://gateway.qoder.com.cn",
+      "accounts": [],
+      "models": []
+    },
+    {
+      "id": "catpaw",
+      "name": "美团妙手 CatPaw（登录态）",
+      "enabled": false,
+      "_说明": "kind=catpaw 走妙手的 round → event → turn 三步会话机，turn 才出 SSE，网关把累积帧裁成增量后回标准 OpenAI 流。accounts[].access 填浏览器 Cookie 里的 X-Passport-Token 值（没有 refresh，过期只能重新网页登录）。这家只吃一段扁平纯文本提示：带 tools 的请求直接 400（不会偷偷丢工具定义），图片同理。models 填上面的模型 id（deepseek-v4-pro / glm-5.3 / longcat-2.0 等），id 决定请求里的 modelType。baseUrl 不用填。",
+      "kind": "catpaw",
+      "accounts": [],
+      "models": [
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+        "glm-5.3",
+        "longcat-2.0",
+        "kimi-k3",
+        "minimax-m3"
+      ]
+    },
+    {
+      "id": "wenxin_web",
+      "name": "百度文心一言网页版（登录态）",
+      "enabled": false,
+      "_说明": "kind=wenxin（也认 wenxin_web）目前只接到认证层：账号、Cookie 拆解（BDUSS / STOKEN / BAIDUID）、登录入口、错误映射都已接好，聊天本体回 501 并说明原因——chat.baidu.com/aichat/api/conversation 的请求体结构、防爬头/签名、响应形状在源码里没有一处取证，凭空写只会变成线上 403。accounts[].access 填整条浏览器 Cookie 串。拿到真实抓包后只需补 internal/provider/wenxin 里的 Run。",
+      "kind": "wenxin",
+      "accounts": [],
+      "models": [
+        "ernie-4.0-turbo",
+        "ernie-speed",
+        "ernie-3.5"
+      ]
+    },
+    {
+      "id": "antigravity",
+      "name": "Google Antigravity（登录态）",
+      "enabled": false,
+      "_说明": "kind=antigravity 走 Code Assist 的 v1internal:streamGenerateContent（信封里带 model/project/userAgent/requestType/requestId 与 sessionId，传输层强制 HTTP/1.1）。accounts[].access 填 OAuth access_token，refresh 填 refresh_token，expires 填毫秒时间戳，domain 填 Cloud 项目 id（留空会走 loadCodeAssist/onboard 自动领）。当前接线只支持纯文本、不支持工具调用（信封里的 toolConfig 还没移植）。模型 id 见 Antigravity 的模型清单（gemini-3-flash / gemini-pro-agent / claude-sonnet-4-6 等）。baseUrl 不用填。",
+      "kind": "antigravity",
+      "accounts": [],
+      "models": [
+        "gemini-3-flash",
+        "gemini-pro-agent",
+        "claude-sonnet-4-6"
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "smart-coding",
+      "name": "主力编程",
+      "strategy": "order",
+      "targets": [
+        "zcode/glm-5.3",
+        "workbuddy/glm-5.3",
+        "deepseek/deepseek-chat"
+      ]
+    },
+    {
+      "id": "cheap",
+      "name": "便宜优先",
+      "strategy": "order",
+      "targets": [
+        "deepseek/deepseek-chat",
+        "siliconflow/deepseek-ai/DeepSeek-V3"
+      ]
+    }
+  ],
+  "routing": {
+    "groupsEnabled": true,
+    "bareModelFallback": false
+  }
+}
