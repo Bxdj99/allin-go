@@ -4,9 +4,27 @@
 
 作为 KernelSU 模块运行时：**不装 APK、不占桌面图标、全程非 root（uid 2000）**，常驻内存约 9 MB。
 
+## 来源与致谢
+
+本项目是 **[xunianooo/All-in](https://github.com/xunianooo/All-in)**（作者 **Gaeul**，MIT）的 Go 语言重写版。
+
+所有供应商协议的实现依据，来自以下两个上游项目：
+
+| 上游 | 作者 | 用途 |
+|---|---|---|
+| [xunianooo/All-in](https://github.com/xunianooo/All-in) | Gaeul | 配置结构、协议适配思路、WorkBuddy 请求策略、提示词注入设计 |
+| [linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) | linguo2625469 | WorkBuddy 任务中心（活跃上报、连登、赠礼、补偿、出行、抽奖）的端点与依赖顺序 |
+| [yetone/magpie](https://github.com/yetone/magpie) | yetone | All-in 本身的协议网关思路来源 |
+
+**协议实现是照着上面这些开源代码翻译/移植的**，不是从零逆向抓包得来。如果原作者认为有不妥之处，请开 Issue，我会调整或移除相应实现。
+
+原项目的许可证是 MIT，本项目的 LICENSE 里保留了原始版权声明。
+
 ## 为什么重写
 
 原版 [xunianooo/All-in](https://github.com/xunianooo/All-in) 是 Java/Android 应用，功能齐但形态重：网关跑在 App 进程里，做成 KSU 模块就得「模块 + APK」两层，而且 `app_process` 方式常驻要 200 MB。这个版本用 Go 重写，编译成单个静态 ELF，模块直接执行。
+
+另外补了两样原版没有的东西：**非 root 运行**（降权到 uid 2000）和 **WorkBuddy 任务中心全自动**。
 
 ## 特性
 
