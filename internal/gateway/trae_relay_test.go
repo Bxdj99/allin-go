@@ -28,7 +28,7 @@ func traeResp(body string) *http.Response {
 func TestRelayTraeStream(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s := &Server{}
-	s.relayTrae(rec, traeResp(traeSSE), true, false, protocolOpenAI, "trae/demo", nil)
+	s.relayTrae(rec, traeResp(traeSSE), true, false, protocolOpenAI, "trae/demo", nil, "trae", newUsageCtx("trae/demo"))
 
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
 		t.Errorf("Content-Type = %q", ct)
@@ -53,7 +53,7 @@ func TestRelayTraeStream(t *testing.T) {
 func TestRelayTraeAggregate(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s := &Server{}
-	s.relayTrae(rec, traeResp(traeSSE), false, false, protocolOpenAI, "trae/demo", nil)
+	s.relayTrae(rec, traeResp(traeSSE), false, false, protocolOpenAI, "trae/demo", nil, "trae", newUsageCtx("trae/demo"))
 
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("Content-Type = %q", ct)
@@ -95,7 +95,7 @@ func TestRelayTraeUpstreamError(t *testing.T) {
 	s := &Server{}
 	resp := traeResp(`{"code":4008,"message":"quota exceeded"}`)
 	resp.StatusCode = http.StatusTooManyRequests
-	s.relayTrae(rec, resp, true, false, protocolOpenAI, "trae/demo", nil)
+	s.relayTrae(rec, resp, true, false, protocolOpenAI, "trae/demo", nil, "trae", newUsageCtx("trae/demo"))
 
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("状态码 = %d", rec.Code)

@@ -15,6 +15,7 @@ import (
 
 	"allin/internal/bridge"
 	"allin/internal/config"
+	"allin/internal/fallback"
 	"allin/internal/prompt"
 	"allin/internal/provider"
 	"allin/internal/provider/codex"
@@ -61,14 +62,20 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/config", s.withAuth(s.handleConfig))
 	s.mux.HandleFunc("/api/models", s.withAuth(s.handleModels))
 	s.mux.HandleFunc("/api/accounts", s.withAuth(s.handleAccounts))
+	s.mux.HandleFunc("/api/health", s.withAuth(s.handleHealth))
 	s.mux.HandleFunc("/api/providers", s.withAuth(s.handleProvidersOrWrite))
+	// 模型目录同步：POST 拉上游目录并写回配置，GET 只看不写。
+	s.mux.HandleFunc("/api/providers/sync", s.withAuth(s.handleProviderSync))
+	s.mux.HandleFunc("/api/providers/catalog", s.withAuth(s.handleProviderCatalog))
 	s.mux.HandleFunc("/api/providers/write", s.withAuth(s.handleProviderWrite))
 	s.mux.HandleFunc("/api/accounts/write", s.withAuth(s.handleAccountWrite))
+	s.mux.HandleFunc("/api/effort", s.withAuth(s.handleEffort))
 	s.mux.HandleFunc("/api/prompt", s.withAuth(s.handlePrompt))
 	s.mux.HandleFunc("/api/prompt/preset", s.withAuth(s.handlePromptPreset))
 	s.mux.HandleFunc("/api/keys", s.withAuth(s.handleKeys))
 	s.mux.HandleFunc("/api/keys/toggle", s.withAuth(s.handleKeyToggle))
 	s.mux.HandleFunc("/api/usage", s.withAuth(s.handleUsage))
+	s.mux.HandleFunc("/api/usage/summary", s.withAuth(s.handleUsageSummary))
 	s.mux.HandleFunc("/api/usage/reset", s.withAuth(s.handleUsageReset))
 	s.mux.HandleFunc("/api/auth/workbuddy/start", s.withAuth(s.handleWorkBuddyStart))
 	s.mux.HandleFunc("/api/auth/workbuddy/poll", s.withAuth(s.handleWorkBuddyPoll))
@@ -196,7 +203,15 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	}
 
 	cfg := s.store.Snapshot()
-	p, _, realModel, err := provider.Resolve(cfg, head.Model)
+	// 请求级记账上下文：一条客户端请求可能换号、换模型甚至换供应商，
+	// 最终记账以真正提供服务的那个供应商/模型为准（见 usageCtx）。
+	uc := newUsageCtx(head.Model)
+	// 模型名允许带思考档位后缀：workbuddy/glm-5.3:high
+	modelNoSuffix, effortSuffix := splitModelEffort(head.Model)
+	// 客户端请求体里的档位也要能读到（resolveEffort 需要它做 auto 模式判断）
+	var reqFields map[string]json.RawMessage
+	_ = json.Unmarshal(body, &reqFields)
+	p, _, realModel, err := provider.Resolve(cfg, modelNoSuffix)
 	if err != nil {
 		s.fail(w, http.StatusBadRequest, err.Error())
 		return
@@ -211,13 +226,13 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	// 信封、HTTP/1.1 约束都在各自包里，套不进下面「BuildRequest + 透传/桥接」的框架。
 	switch kind {
 	case provider.KindCatPaw, provider.KindWenxin, provider.KindAntigravity:
-		s.forwardWebChat(w, r, p, kind, realModel, body, head.Stream, proto)
+		s.forwardWebChat(w, r, p, kind, realModel, body, head.Stream, proto, uc)
 		return
 	}
 	// DeepSeek 网页版整条链路自己走：端点、PoW、会话链、patch 流都和 OpenAI 兼容
 	// 上游不一样，套不进下面的「透传 / 协议桥接」框架。
 	if kind == provider.KindDeepSeekW {
-		s.forwardDeepSeek(w, r, p, realModel, body, head.Stream, proto)
+		s.forwardDeepSeek(w, r, p, realModel, body, head.Stream, proto, uc)
 		return
 	}
 	// 上游协议：workbuddy 这类特殊供应商走 OpenAI 形态
@@ -263,8 +278,8 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 
 	// WorkBuddy 需要请求体适配：工具名规范化、tool_choice 归一化、补 reasoning_effort
 	if kind == provider.KindWorkBuddy {
-		effort := ""
-		if p.Headers != nil {
+		effort := resolveEffort(cfg, effortSuffix, reqFields)
+		if effort == "" && p.Headers != nil {
 			effort = p.Headers["X-Allin-Effort"]
 		}
 		if prepared, perr := workbuddy.Prepare(upstreamBody, effort); perr == nil {
@@ -306,117 +321,166 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		log.Printf("提示词注入失败（按原样发送）: %v", perr)
 	}
 
+	// 其它供应商：把档位按各自协议写进请求体
+	if kind != provider.KindWorkBuddy {
+		effort := resolveEffort(cfg, effortSuffix, reqFields)
+		if effort != "" {
+			if nb, eerr := applyEffortToBody(upstreamBody, effort, upstreamProto == protocolAnthropic); eerr == nil {
+				upstreamBody = nb
+			}
+		}
+	}
+
+	// 流式请求要上游把 token 用量带回来：OpenAI 系补 stream_options.include_usage。
+	// 不认识这个字段的上游会直接忽略，无害；Anthropic 协议本来就在 message_delta 里给。
+	if upstreamProto == protocolOpenAI {
+		upstreamBody = withStreamUsage(upstreamBody)
+	}
+
 	base := p.BaseURL
 	if base == "" {
 		base = provider.DefaultBaseURL(kind)
 	}
 	if base == "" {
 		s.fail(w, http.StatusBadRequest, fmt.Sprintf("供应商 %s 没有配置 baseUrl", p.ID))
+		uc.fail("")
 		return
 	}
 
 	// Trae 的响应是它自己的事件流，必须逐帧转换，不能透传；转换时要认识「声明过哪些工具」，
 	// 否则正文里文本形式的工具调用会被当成普通文字。工具表从送给上游的那份请求体里取。
-	var traeTools []trae.ToolSpec
-	if kind == provider.KindTrae {
-		traeTools = trae.ToolSpecs(upstreamBody)
-	}
+	// （工具表在下面每个降级步骤里按 stepBody 现算，见 relayTrae 调用处）
 
-	// 账号轮转：失败换号重试
-	tried := map[string]bool{}
-	for attempt := 0; attempt < maxAccountAttempts; attempt++ {
-		acct := s.pool.Pick(p, tried)
-		if acct == nil {
-			if attempt == 0 {
-				s.fail(w, http.StatusBadRequest, fmt.Sprintf("供应商 %s 没有可用账号", p.ID))
-			} else {
-				s.fail(w, http.StatusBadGateway, fmt.Sprintf("供应商 %s 的账号都试过了，全部失败", p.ID))
-			}
-			return
-		}
-		if attempt > 0 {
-			s.switches.Add(1)
-			log.Printf("换号重试: %s/%s（第 %d 次）", p.ID, acct.ID, attempt+1)
-		}
-		tried[acct.ID] = true
+	// 三层降级：同模型换号 → 同供应商换模型 → 放弃
+	chain := fallback.Chain(cfg, p, realModel)
+	modelFallback := true
+	var lastErrMsg string
 
-		upreq, err := provider.BuildRequest(kind, base, apiPath, acct.Key(), acct, upstreamBody, p.Headers)
-		if err != nil {
-			s.fail(w, http.StatusInternalServerError, "构造上游请求失败: "+err.Error())
-			return
+	for _, step := range chain {
+		if !modelFallback {
+			break // 已经拿到非额度类错误，不再继续换模型
 		}
-		if (head.Stream || kind == provider.KindWorkBuddy || kind == provider.KindTrae) && !needBridge {
-			upreq.Header.Set("Accept", "text/event-stream")
-		}
-		upreq = upreq.WithContext(r.Context())
-
-		resp, err := provider.HTTPClient.Do(upreq)
-		if err != nil {
-			s.pool.Fail(p.ID, acct.ID, 0, err.Error())
-			log.Printf("上游请求失败 %s/%s: %v", p.ID, acct.ID, err)
+		sp := step.Provider
+		if sp == nil {
 			continue
 		}
-
-		// 需要换号的状态码
-		if resp.StatusCode == 401 || resp.StatusCode == 429 || resp.StatusCode >= 500 {
-			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			resp.Body.Close()
-			s.pool.Fail(p.ID, acct.ID, resp.StatusCode, truncate(string(raw), 160))
-			log.Printf("上游 %d，换号: %s/%s", resp.StatusCode, p.ID, acct.ID)
-			continue
+		stepBase := sp.BaseURL
+		if stepBase == "" {
+			stepBase = provider.DefaultBaseURL(kind)
 		}
 
-		s.pool.Success(p.ID, acct.ID)
-		// Qoder 的上游永远是 SSE，而且每帧 data 还套了一层 {statusCodeValue, body} 信封，
-		// 不能透传字节流：流式要逐帧解成标准 OpenAI 事件，非流式在本地聚合成一个
-		// chat.completion（必要时再转成 Anthropic 形态）。
-		if kind == provider.KindQoder {
-			s.relayQoder(w, resp, head.Stream, needBridge, proto, realModel)
-			return
-		}
-		// Trae 的上游响应是自定义 SSE 事件流，必须转换后才能给客户端；
-		// 客户端要非流式时在本地把整条流聚合成一个 chat.completion。
-		if kind == provider.KindTrae {
-			s.relayTrae(w, resp, head.Stream, needBridge, proto, realModel, traeTools)
-			return
-		}
-		// WorkBuddy 上游一定是流式。客户端要非流式时先聚合，
-		// 需要跨协议时再拿聚合结果去转换（这里容易踩：先转协议会把 SSE 当 JSON 解析）
-		if kind == provider.KindWorkBuddy && !head.Stream {
-			aggregated, aerr := workbuddy.Aggregate(resp.Body, realModel)
-			resp.Body.Close()
-			if aerr != nil {
-				s.fail(w, http.StatusBadGateway, "WorkBuddy 响应聚合失败: "+aerr.Error())
-				return
-			}
-			if needBridge && proto == protocolAnthropic {
-				converted, cerr := bridge.OpenAIToAnthropic(aggregated, realModel)
-				if cerr != nil {
-					s.fail(w, http.StatusBadGateway, "响应协议转换失败: "+cerr.Error())
-					return
+		// 换模型时要重新改写请求体（model 名不同）
+		stepBody := upstreamBody
+		if step.Model != realModel {
+			if nb, rerr := rewriteModel(body, step.Model); rerr == nil {
+				stepBody = nb
+				// 重跑一次供应商侧的预处理（工具名规范化等）
+				if kind == provider.KindWorkBuddy {
+					eff := resolveEffort(cfg, effortSuffix, reqFields)
+					if nb2, e2 := workbuddy.Prepare(stepBody, eff); e2 == nil {
+						stepBody = nb2
+					}
+					if nb3, e3 := workbuddy.ForceStream(stepBody); e3 == nil {
+						stepBody = nb3
+					}
 				}
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write(converted)
+				if nb4, e4 := applyEffortToBody(stepBody, resolveEffort(cfg, effortSuffix, reqFields), upstreamProto == protocolAnthropic); e4 == nil {
+					stepBody = nb4
+				}
+				if upstreamProto == protocolOpenAI {
+					// 上面的改写会重新序列化请求体，include_usage 得补回来
+					stepBody = withStreamUsage(stepBody)
+				}
+			}
+		}
+
+		tried := map[string]bool{}
+		modelExhausted := false
+		for attempt := 0; attempt < maxAccountAttempts; attempt++ {
+			acct := s.pool.Pick(sp, tried)
+			if acct == nil {
+				modelExhausted = true
+				break
+			}
+			if attempt > 0 {
+				s.switches.Add(1)
+				log.Printf("换号重试: %s/%s（第 %d 次）", sp.ID, acct.ID, attempt+1)
+			}
+			tried[acct.ID] = true
+
+			upreq, err := provider.BuildRequest(kind, stepBase, apiPath, acct.Key(), acct, stepBody, sp.Headers)
+			if err != nil {
+				s.fail(w, http.StatusInternalServerError, "构造上游请求失败: "+err.Error())
 				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(aggregated)
+			if (head.Stream || kind == provider.KindWorkBuddy || kind == provider.KindTrae) && !needBridge {
+				upreq.Header.Set("Accept", "text/event-stream")
+			}
+			upreq = upreq.WithContext(r.Context())
+
+			resp, err := provider.HTTPClient.Do(upreq)
+			if err != nil {
+				uc.fail(sp.ID, step.Model)
+				s.pool.Fail(sp.ID, acct.ID, 0, err.Error())
+				lastErrMsg = err.Error()
+				log.Printf("上游请求失败 %s/%s: %v", sp.ID, acct.ID, err)
+				continue
+			}
+
+			if resp.StatusCode == 401 || resp.StatusCode == 429 || resp.StatusCode >= 500 {
+				raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+				resp.Body.Close()
+				bodyText := string(raw)
+				uc.fail(sp.ID, step.Model)
+				s.pool.Fail(sp.ID, acct.ID, resp.StatusCode, truncate(bodyText, 160))
+				lastErrMsg = truncate(bodyText, 200)
+				log.Printf("上游 %d，换号: %s/%s", resp.StatusCode, sp.ID, acct.ID)
+				// 额度类错误 → 整个模型都别试了，直接进下一个模型
+				if fallback.ShouldFallbackModel(resp.StatusCode, bodyText) {
+					modelExhausted = true
+					break
+				}
+				continue
+			}
+
+			if step.Model != realModel {
+				log.Printf("模型降级生效: %s → %s（%s/%s）", realModel, step.Model, sp.ID, acct.ID)
+				s.switches.Add(1)
+			}
+			s.pool.Success(sp.ID, acct.ID)
+			if kind == provider.KindTrae {
+				// Trae 的流式转换要知道请求里声明了哪些工具
+				s.relayTrae(w, resp, head.Stream, needBridge, proto, step.Model, trae.ToolSpecs(stepBody), sp.ID, uc)
+				return
+			}
+			s.relay(w, resp, head.Stream, needBridge, proto, step.Model, sp.ID, uc)
 			return
 		}
-		s.relay(w, resp, head.Stream, needBridge, proto, realModel)
-		return
+
+		if !modelExhausted {
+			// 出现了非额度类失败（如网络错误），换模型帮助不大，但也试一次
+			continue
+		}
+		log.Printf("模型 %s 在 %s 上额度耗尽，尝试降级", step.Model, step.ProviderID)
 	}
 
-	s.fail(w, http.StatusBadGateway, "所有账号尝试均失败")
+	uc.fail("")
+	if lastErrMsg != "" {
+		s.fail(w, http.StatusBadGateway, "所有账号与模型均失败，最后一次错误: "+lastErrMsg)
+	} else {
+		s.fail(w, http.StatusBadGateway, "所有账号尝试均失败")
+	}
+	return
 }
 
-// relay 把上游响应回写给客户端，必要时转换协议。
-func (s *Server) relay(w http.ResponseWriter, resp *http.Response, stream, needBridge bool, clientProto protocol, model string) {
+// relay 把上游响应回写给客户端，必要时转换协议，并在收尾时记一次用量。
+//
+// providerID 是真正提供服务的供应商（换号换模型后可能与请求最初选中的不同），
+// uc 是这条客户端请求的记账上下文。
+func (s *Server) relay(w http.ResponseWriter, resp *http.Response, stream, needBridge bool, clientProto protocol, model, providerID string, uc *usageCtx) {
 	defer resp.Body.Close()
 
-	// 流式且不需要转换：直接透传字节流（最快路径）
+	// 流式且不需要转换：边透传边扫 usage（SSE 最后一帧里），不缓存整条响应
 	if stream && !needBridge {
 		ct := resp.Header.Get("Content-Type")
 		if ct == "" {
@@ -427,20 +491,24 @@ func (s *Server) relay(w http.ResponseWriter, resp *http.Response, stream, needB
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(resp.StatusCode)
-		flushCopy(w, resp.Body)
+		insp := &sseInspector{}
+		flushCopy(w, resp.Body, insp.feed)
+		// 已经写完流：ok 只看上游状态码，token 拿不到就记 0
+		uc.record(providerID, model, resp.StatusCode < 400, insp.result())
 		return
 	}
 
 	// 非流式：完整读取后按需转换
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
+		uc.fail(providerID, model)
 		s.fail(w, http.StatusBadGateway, "读取上游响应失败: "+err.Error())
 		return
 	}
+	u := usageFromJSON(raw)
+	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
 	if !needBridge {
-		// 顺手抽 usage 记进统计表（拿不到就记 0）
-		inTok, outTok := extractUsage(raw)
-		recordUsage(resp.Request.URL.Host, model, resp.StatusCode < 400, inTok, outTok)
+		uc.record(providerID, model, ok, u)
 		ct := resp.Header.Get("Content-Type")
 		if ct == "" {
 			ct = "application/json"
@@ -451,7 +519,8 @@ func (s *Server) relay(w http.ResponseWriter, resp *http.Response, stream, needB
 		return
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if !ok {
+		uc.record(providerID, model, false, u)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(raw)
@@ -465,9 +534,11 @@ func (s *Server) relay(w http.ResponseWriter, resp *http.Response, stream, needB
 		converted, err = bridge.AnthropicToOpenAIResponse(raw, model)
 	}
 	if err != nil {
+		uc.record(providerID, model, false, u)
 		s.fail(w, http.StatusBadGateway, "响应协议转换失败: "+err.Error())
 		return
 	}
+	uc.record(providerID, model, true, u)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(converted)
@@ -477,12 +548,13 @@ func (s *Server) relay(w http.ResponseWriter, resp *http.Response, stream, needB
 //
 // Trae 上游只会回它自己的 SSE（event/data 帧），必须逐帧转换后写给客户端，
 // 不能像其他供应商那样直接透传字节流；客户端要非流式时用 ConvertStream 整条聚合。
-func (s *Server) relayTrae(w http.ResponseWriter, resp *http.Response, stream, needBridge bool, clientProto protocol, model string, tools []trae.ToolSpec) {
+func (s *Server) relayTrae(w http.ResponseWriter, resp *http.Response, stream, needBridge bool, clientProto protocol, model string, tools []trae.ToolSpec, providerID string, uc *usageCtx) {
 	defer resp.Body.Close()
 
 	// 上游明确报错时回的是普通 JSON（不是事件流），原样转出去让客户端看清原因。
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		uc.record(providerID, model, false, usageFromJSON(raw))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(raw)
@@ -494,17 +566,22 @@ func (s *Server) relayTrae(w http.ResponseWriter, resp *http.Response, stream, n
 		out, err := trae.ConvertStreamWithTools(resp.Body, model, tools)
 		if err != nil {
 			log.Printf("Trae 响应聚合失败: %v", err)
+			uc.fail(providerID, model)
 			s.fail(w, http.StatusBadGateway, "Trae 响应聚合失败: "+err.Error())
 			return
 		}
+		u := usageFromJSON(out) // 聚合结果里带着上游 token_usage 帧累加出来的 usage
 		if needBridge {
 			converted, cerr := bridge.OpenAIToAnthropic(out, model)
 			if cerr != nil {
+				log.Printf("Trae 响应协议转换失败: %v", cerr)
+				uc.record(providerID, model, false, u)
 				s.fail(w, http.StatusBadGateway, "响应协议转换失败: "+cerr.Error())
 				return
 			}
 			out = converted
 		}
+		uc.record(providerID, model, true, u)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(out)
@@ -514,6 +591,7 @@ func (s *Server) relayTrae(w http.ResponseWriter, resp *http.Response, stream, n
 	// 流式：一行一行喂给状态机，转换结果逐帧写回。
 	st := trae.NewStreamState(model)
 	if err := st.DeclareTools(tools); err != nil {
+		uc.fail(providerID, model)
 		s.fail(w, http.StatusBadGateway, "Trae 工具声明失败: "+err.Error())
 		return
 	}
@@ -539,31 +617,41 @@ func (s *Server) relayTrae(w http.ResponseWriter, resp *http.Response, stream, n
 
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64<<10), 4<<20) // 单帧上限 1 MiB，留够余量
+	// token 用量在 Trae 自己的 token_usage 事件里，这里按行扫一遍上游原始帧
+	insp := &sseInspector{}
 	for sc.Scan() {
-		frames, err := trae.TransformEvent(sc.Text(), st)
+		line := sc.Text()
+		insp.feed([]byte(line + "\n"))
+		frames, err := trae.TransformEvent(line, st)
 		if err != nil {
 			// 已经开始写响应体，改不了状态码，只能收尾（客户端读到 EOF 会视为结束）。
 			log.Printf("Trae 流转换中断: %v", err)
+			uc.record(providerID, model, false, insp.result())
 			return
 		}
 		if !send(frames) {
+			uc.record(providerID, model, false, insp.result())
 			return
 		}
 		if st.Terminal {
+			uc.record(providerID, model, true, insp.result())
 			return
 		}
 	}
 	if err := sc.Err(); err != nil {
 		log.Printf("Trae 上游读取中断: %v", err)
+		uc.record(providerID, model, false, insp.result())
 		return
 	}
 	// 兜底：最后一个没以空行收尾的帧补发掉（含末尾的 [DONE]）。
 	frames, err := trae.Flush(st)
 	if err != nil {
 		log.Printf("Trae 流收尾失败: %v", err)
+		uc.record(providerID, model, false, insp.result())
 		return
 	}
 	send(frames)
+	uc.record(providerID, model, true, insp.result())
 }
 
 // relayQoder 把 Qoder 的上游事件流转成标准 OpenAI 响应。
@@ -571,12 +659,13 @@ func (s *Server) relayTrae(w http.ResponseWriter, resp *http.Response, stream, n
 // Qoder 的聊天端点只给 SSE，而且每帧 data 外面还包着 {"statusCodeValue":200,"body":"…"}，
 // body 里才是 OpenAI 形态的 chunk（请求带 Encode=1 时 body 还可能被自定义 base64 编过）。
 // 所以这里不能透传字节流：流式逐帧解出来重写，非流式整条聚合成一个 chat.completion。
-func (s *Server) relayQoder(w http.ResponseWriter, resp *http.Response, stream, needBridge bool, clientProto protocol, model string) {
+func (s *Server) relayQoder(w http.ResponseWriter, resp *http.Response, stream, needBridge bool, clientProto protocol, model, providerID string, uc *usageCtx) {
 	defer resp.Body.Close()
 
 	// 上游明确报错时回的是普通 JSON（不是事件流），原样转出去让客户端看清原因。
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		uc.record(providerID, model, false, usageFromJSON(raw))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(raw)
@@ -588,17 +677,22 @@ func (s *Server) relayQoder(w http.ResponseWriter, resp *http.Response, stream, 
 		out, err := qoder.Aggregate(resp.Body, model)
 		if err != nil {
 			log.Printf("Qoder 响应聚合失败: %v", err)
+			uc.fail(providerID, model)
 			s.fail(w, http.StatusBadGateway, "Qoder 响应聚合失败: "+err.Error())
 			return
 		}
+		u := usageFromJSON(out) // 聚合结果里的 usage 来自上游帧
 		if needBridge && clientProto == protocolAnthropic {
 			converted, cerr := bridge.OpenAIToAnthropic(out, model)
 			if cerr != nil {
+				log.Printf("Qoder 响应协议转换失败: %v", cerr)
+				uc.record(providerID, model, false, u)
 				s.fail(w, http.StatusBadGateway, "响应协议转换失败: "+cerr.Error())
 				return
 			}
 			out = converted
 		}
+		uc.record(providerID, model, true, u)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(out)
@@ -612,25 +706,34 @@ func (s *Server) relayQoder(w http.ResponseWriter, resp *http.Response, stream, 
 	w.WriteHeader(http.StatusOK)
 
 	flusher, canFlush := w.(http.Flusher)
-	// 解一帧写一帧并 flush，客户端才能看到增量。
-	dst := &flushWriter{w: w, canFlush: canFlush}
+	// 解一帧写一帧并 flush，客户端才能看到增量；写出去的字节顺带扫 usage。
+	insp := &sseInspector{}
+	dst := &flushWriter{w: w, canFlush: canFlush, tap: insp.feed}
 	if err := qoder.RelayStream(dst, resp.Body); err != nil {
 		// 已经开始写响应体，改不了状态码，只能收尾（客户端读到 EOF 会视为结束）。
 		log.Printf("Qoder 流转换中断: %v", err)
+		uc.record(providerID, model, false, insp.result())
 		return
 	}
 	if canFlush {
 		flusher.Flush()
 	}
+	uc.record(providerID, model, true, insp.result())
 }
 
 // flushWriter 让 qoder 的逐帧写出立即落到客户端。
+//
+// tap 可选：在写之前把字节交给它扫描（用来看流里的 usage），不影响写出内容。
 type flushWriter struct {
 	w        http.ResponseWriter
 	canFlush bool
+	tap      func([]byte)
 }
 
 func (f *flushWriter) Write(p []byte) (int, error) {
+	if f.tap != nil {
+		f.tap(p)
+	}
 	n, err := f.w.Write(p)
 	if f.canFlush {
 		if flusher, ok := f.w.(http.Flusher); ok {
@@ -640,12 +743,19 @@ func (f *flushWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func flushCopy(w http.ResponseWriter, body io.Reader) {
+// flushCopy 把 body 原样写给 w 并逐块 flush。
+//
+// onChunk 可为 nil；提供时每读到一块就先回调（用于边转发边抽 SSE 的 usage），
+// 回调里只允许做轻量扫描，不能改动字节内容。
+func flushCopy(w http.ResponseWriter, body io.Reader, onChunk func([]byte)) {
 	flusher, canFlush := w.(http.Flusher)
 	buf := make([]byte, 32*1024)
 	for {
 		n, rerr := body.Read(buf)
 		if n > 0 {
+			if onChunk != nil {
+				onChunk(buf[:n])
+			}
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				return
 			}
@@ -701,28 +811,13 @@ func decodeJSON(r *http.Request, v any) error {
 	return json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(v)
 }
 
-// extractUsage 从响应体里抽 prompt_tokens / completion_tokens。
+// extractUsage 从非流式响应体里抽 (输入, 输出) token。
+//
+// 实际解析在 usage_stream.go 的 usageFromJSON：OpenAI 的
+// prompt_tokens/completion_tokens 与 Anthropic 的 input_tokens/output_tokens 都认。
 func extractUsage(raw []byte) (int, int) {
-	var env struct {
-		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			InputTokens      int `json:"input_tokens"`
-			OutputTokens     int `json:"output_tokens"`
-		} `json:"usage"`
-	}
-	if json.Unmarshal(raw, &env) != nil {
-		return 0, 0
-	}
-	in := env.Usage.PromptTokens
-	if in == 0 {
-		in = env.Usage.InputTokens
-	}
-	out := env.Usage.CompletionTokens
-	if out == 0 {
-		out = env.Usage.OutputTokens
-	}
-	return in, out
+	u := usageFromJSON(raw)
+	return u.In, u.Out
 }
 
 func truncate(s string, n int) string {

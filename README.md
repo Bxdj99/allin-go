@@ -4,21 +4,9 @@
 
 作为 KernelSU 模块运行时：**不装 APK、不占桌面图标、全程非 root（uid 2000）**，常驻内存约 9 MB。
 
-## 来源与致谢
-
-本项目是 **[xunianooo/All-in](https://github.com/xunianooo/All-in)**（作者 **Gaeul**，MIT）的 Go 语言重写版。
-
-所有供应商协议的实现依据，来自以下两个上游项目：
-
-| 上游 | 作者 | 用途 |
-|---|---|---|
-| [xunianooo/All-in](https://github.com/xunianooo/All-in) | Gaeul | 配置结构、协议适配思路、WorkBuddy 请求策略、提示词注入设计 |
-| [linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) | linguo2625469 | WorkBuddy 任务中心（活跃上报、连登、赠礼、补偿、出行、抽奖）的端点与依赖顺序 |
-| [yetone/magpie](https://github.com/yetone/magpie) | yetone | All-in 本身的协议网关思路来源 |
-
-**协议实现是照着上面这些开源代码翻译/移植的**，不是从零逆向抓包得来。如果原作者认为有不妥之处，请开 Issue，我会调整或移除相应实现。
-
-原项目的许可证是 MIT，本项目的 LICENSE 里保留了原始版权声明。
+> **来源**：本项目是 [xunianooo/All-in](https://github.com/xunianooo/All-in)（作者 **Gaeul**，MIT）的 Go 语言重写版。
+> 协议实现依据 [xunianooo/All-in](https://github.com/xunianooo/All-in) 与 [linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel)（作者 linguo2625469）翻译移植，
+> 并参考 [yetone/magpie](https://github.com/yetone/magpie)。原始版权声明保留在 LICENSE 中。
 
 ## 为什么重写
 

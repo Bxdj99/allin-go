@@ -44,7 +44,7 @@ func qoderResp(body string, status int) *http.Response {
 func TestRelayQoderStream(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s := &Server{}
-	s.relayQoder(rec, qoderResp(qoderSSE, http.StatusOK), true, false, protocolOpenAI, "qoder_cn/qmodel_demo")
+	s.relayQoder(rec, qoderResp(qoderSSE, http.StatusOK), true, false, protocolOpenAI, "qoder_cn/qmodel_demo", "qoder_cn", newUsageCtx("qoder_cn/qmodel_demo"))
 
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
 		t.Errorf("Content-Type = %q", ct)
@@ -68,7 +68,7 @@ func TestRelayQoderStream(t *testing.T) {
 func TestRelayQoderAggregate(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s := &Server{}
-	s.relayQoder(rec, qoderResp(qoderSSE, http.StatusOK), false, false, protocolOpenAI, "qoder_cn/qmodel_demo")
+	s.relayQoder(rec, qoderResp(qoderSSE, http.StatusOK), false, false, protocolOpenAI, "qoder_cn/qmodel_demo", "qoder_cn", newUsageCtx("qoder_cn/qmodel_demo"))
 
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("Content-Type = %q", ct)
@@ -101,7 +101,7 @@ func TestRelayQoderUpstreamError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s := &Server{}
 	s.relayQoder(rec, qoderResp(`{"error":"quota exhausted"}`, http.StatusTooManyRequests),
-		true, false, protocolOpenAI, "qoder_cn/qmodel_demo")
+		true, false, protocolOpenAI, "qoder_cn/qmodel_demo", "qoder_cn", newUsageCtx("qoder_cn/qmodel_demo"))
 
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("状态码应透传，实际 %d", rec.Code)

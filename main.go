@@ -71,6 +71,10 @@ func main() {
 		}
 	}()
 
+	// autoSyncModels=true 的供应商在后台同步一次模型目录（只追加，不覆盖）。
+	// 放 goroutine 里跑：启动不该被上游网络状况拖住。
+	go srv.StartAutoSyncModels(context.Background())
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 

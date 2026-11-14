@@ -92,6 +92,9 @@ type Provider struct {
 	APIKey   string     `json:"apiKey,omitempty"`
 	Accounts []*Account `json:"accounts,omitempty"`
 	Models   []string   `json:"models,omitempty"`
+	// AutoSyncModels 为真时，网关启动后在后台同步一次模型目录（只追加不覆盖，
+	// 口径同 POST /api/providers/sync）。默认 false：目录同步要打上游，不该默认消耗。
+	AutoSyncModels bool `json:"autoSyncModels,omitempty"`
 	// Headers 是发往上游时附加的固定头（个别供应商需要 X-Domain 之类）。
 	Headers map[string]string `json:"headers,omitempty"`
 	// HeaderPrefix 供特殊供应商在运行时用账号信息拼头。
@@ -128,6 +131,15 @@ type PromptConfig struct {
 	Inline string `json:"inline,omitempty"`
 }
 
+// ReasoningConfig 是思考强度（reasoning effort）配置。
+//
+//	mode=auto   客户端带了就用客户端的，没带用 effort
+//	mode=force  无条件用 effort，覆盖客户端
+type ReasoningConfig struct {
+	Mode   string `json:"mode,omitempty"`
+	Effort string `json:"effort,omitempty"`
+}
+
 // APIKey 是发给客户端的调用凭据（可与主网关口令并存）。
 type APIKey struct {
 	ID        string `json:"id"`
@@ -151,6 +163,8 @@ type Config struct {
 	Routing   Routing     `json:"routing"`
 	// Prompt 是网关级系统提示词注入配置（压过客户端自带的 system）
 	Prompt PromptConfig `json:"prompt,omitempty"`
+	// Reasoning 是思考强度默认值
+	Reasoning ReasoningConfig `json:"reasoning,omitempty"`
 	// Setup 记录是否完成首次向导，供面板判断。
 	Setup struct {
 		Done   bool  `json:"done"`

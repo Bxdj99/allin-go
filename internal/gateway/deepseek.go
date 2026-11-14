@@ -361,17 +361,19 @@ func dsGatewayStatus(err error) int {
 
 // forwardDeepSeek 处理 kind = deepseek-web 的请求：
 // 修模型别名 → 校验 → 取会话 → 一轮（PoW + completion）→ patch 流转 OpenAI 响应。
-func (s *Server) forwardDeepSeek(w http.ResponseWriter, r *http.Request, p *config.Provider, realModel string, body []byte, stream bool, proto protocol) {
+func (s *Server) forwardDeepSeek(w http.ResponseWriter, r *http.Request, p *config.Provider, realModel string, body []byte, stream bool, proto protocol, uc *usageCtx) {
 	// Anthropic 客户端先把请求体翻成 OpenAI 形态。网页版没有流式输入，
 	// 跨协议流式沿用其它供应商的口径：直接拒绝，让调用方改 stream=false。
 	if proto == protocolAnthropic {
 		if stream {
+			uc.fail(p.ID, realModel)
 			s.fail(w, http.StatusBadRequest,
 				"DeepSeek 网页版暂不支持 Anthropic 流式请求，请把 stream 设为 false")
 			return
 		}
 		converted, err := bridge.AnthropicToOpenAI(body, realModel)
 		if err != nil {
+			uc.fail(p.ID, realModel)
 			s.fail(w, http.StatusBadRequest, "协议转换失败: "+err.Error())
 			return
 		}
@@ -386,6 +388,7 @@ func (s *Server) forwardDeepSeek(w http.ResponseWriter, r *http.Request, p *conf
 	}
 	rewritten, err := rewriteModel(body, alias)
 	if err != nil {
+		uc.fail(p.ID, realModel)
 		s.fail(w, http.StatusInternalServerError, "改写请求体失败: "+err.Error())
 		return
 	}
@@ -394,6 +397,7 @@ func (s *Server) forwardDeepSeek(w http.ResponseWriter, r *http.Request, p *conf
 	// 先做纯本地校验（模型、messages 结构、tools 形态），不合法立刻 400，
 	// 别白跑一次 PoW 和建会话。
 	if _, perr := deepseekweb.Prepare(body, "", nil); perr != nil {
+		uc.fail(p.ID, realModel)
 		s.fail(w, http.StatusBadRequest, perr.Error())
 		return
 	}
@@ -410,6 +414,7 @@ func (s *Server) forwardDeepSeek(w http.ResponseWriter, r *http.Request, p *conf
 		acct := s.pool.Pick(p, tried)
 		if acct == nil {
 			if attempt == 0 {
+				uc.fail(p.ID, realModel)
 				s.fail(w, http.StatusBadRequest, fmt.Sprintf("供应商 %s 没有可用账号", p.ID))
 				return
 			}
@@ -423,6 +428,7 @@ func (s *Server) forwardDeepSeek(w http.ResponseWriter, r *http.Request, p *conf
 
 		client, cerr := deepseekweb.NewClient(acct.Key())
 		if cerr != nil {
+			uc.fail(p.ID, realModel)
 			s.pool.Fail(p.ID, acct.ID, 0, cerr.Error())
 			lastErr = cerr
 			continue
@@ -435,6 +441,7 @@ func (s *Server) forwardDeepSeek(w http.ResponseWriter, r *http.Request, p *conf
 		key := p.ID + "|" + acct.ID + "|" + conv
 		entry, aerr := dsSessions.acquire(r.Context(), key)
 		if aerr != nil {
+			uc.fail(p.ID, realModel)
 			s.fail(w, http.StatusRequestTimeout, "等待会话空闲被取消: "+aerr.Error())
 			return
 		}
@@ -455,6 +462,8 @@ func (s *Server) forwardDeepSeek(w http.ResponseWriter, r *http.Request, p *conf
 			dsSessions.release(key, entry)
 			s.pool.Fail(p.ID, acct.ID, dsStatusOf(rerr), truncate(rerr.Error(), 160))
 			lastErr = rerr
+			// 已经流出正文（可能还带了用量）时按实际用量记，否则只记失败
+			uc.record(p.ID, realModel, false, dsUsageOf(st))
 			if relay.started {
 				// 已经把响应头发给客户端，改不了状态码，只能断流（客户端读到 EOF 会当结束）
 				log.Printf("DeepSeek 网页版流中断: %v", rerr)
@@ -470,17 +479,30 @@ func (s *Server) forwardDeepSeek(w http.ResponseWriter, r *http.Request, p *conf
 		entry.commit(res.SessionID, res.Stream.MessageID, res.Stream.HasMessageID)
 		dsSessions.release(key, entry)
 		s.pool.Success(p.ID, acct.ID)
+		uc.record(p.ID, realModel, true, dsUsageOf(res.Stream))
 		if ferr := relay.finish(res.Stream); ferr != nil {
 			log.Printf("DeepSeek 网页版回写失败: %v", ferr)
 		}
 		return
 	}
 
+	uc.fail(p.ID, realModel)
 	if lastErr != nil {
 		s.fail(w, http.StatusBadGateway, "DeepSeek 网页版所有账号尝试均失败: "+lastErr.Error())
 		return
 	}
 	s.fail(w, http.StatusBadGateway, "DeepSeek 网页版所有账号尝试均失败")
+}
+
+// dsUsageOf 把 DeepSeek 网页版的 StreamState 用量转成统计口径。
+//
+// 上游只给 accumulated_token_usage（不区分输入输出），所以整体记进输出侧，
+// 面板看到的总量是对的，拆分口径会偏。
+func dsUsageOf(st *deepseekweb.StreamState) usageTokens {
+	if st == nil || st.Usage <= 0 {
+		return usageTokens{}
+	}
+	return usageTokens{Total: int(st.Usage), Out: int(st.Usage)}
 }
 
 // dsStatusOf 取上游 HTTP 状态码（没有就当 0，交给账号池按网络错误处理）。

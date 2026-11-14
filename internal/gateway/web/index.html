@@ -216,6 +216,38 @@
   </div>
 
   <div class="card">
+    <h2>思考强度</h2>
+    <div class="hint" style="margin-top:0">
+      控制模型「想多久」。不同上游参数名不一样（reasoning_effort / thinking budget / thinking_enabled），
+      网关自动按协议翻译。客户端也能在模型名后面加后缀单独覆盖：<code>workbuddy/glm-5.3:high</code>
+    </div>
+    <div class="field">
+      <label>生效方式</label>
+      <select id="effortMode" autocomplete="off">
+        <option value="auto">auto — 客户端带了就用客户端的，没带用下面这个</option>
+        <option value="force">force — 无条件用下面这个，覆盖客户端</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>默认档位</label>
+      <select id="effortLevel" autocomplete="off">
+        <option value="">跟随请求（客户端发什么就是什么）</option>
+        <option value="off">关闭思考</option>
+        <option value="low">低 —— 快，省 token</option>
+        <option value="medium">中</option>
+        <option value="high">高 —— 默认推荐</option>
+        <option value="xhigh">极高</option>
+        <option value="max">拉满 —— 最慢最贵</option>
+      </select>
+    </div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnSaveEffort">保存</button>
+      <button class="btn" id="btnReloadEffort">重新加载</button>
+    </div>
+    <div id="effortMsg" class="dim" style="font-size:12px;margin-top:6px"></div>
+  </div>
+
+  <div class="card">
     <h2>可用模型 <span class="dim" id="modelCount"></span></h2>
     <div id="models"><span class="dim">加载中…</span></div>
     <div class="hint">调用时模型名写成 <code>供应商id/模型名</code>，例如 <code>workbuddy/glm-5.3</code>。</div>
@@ -224,7 +256,9 @@
 
 <!-- ==================== 2. 供应商 ==================== -->
 <section class="page" id="page-providers">
-  <div class="card">
+  
+  <div id="healthBanner" style="display:none;margin-bottom:12px;padding:10px 14px;border-radius:10px;font-size:13px"></div>
+<div class="card">
     <h2>供应商 <span class="dim" id="provCount"></span></h2>
     <div id="providerList"><div class="dim">加载中…</div></div>
   </div>
@@ -259,7 +293,9 @@
     <div class="btnrow">
       <button class="btn primary" id="btnProvSave">保存供应商</button>
       <button class="btn" id="btnProvCancel" hidden>取消编辑</button>
-    </div>
+    
+      <button class="btn" id="btnSyncModels">同步上游模型目录</button>
+      <div id="syncMsg" style="width:100%;margin-top:8px"></div></div>
   </div>
 </section>
 
@@ -460,6 +496,22 @@ const S = {
 const $ = (s) => document.querySelector(s);
 const el = (id) => document.getElementById(id);
 
+// on(id, event, handler)：元素不存在时静默跳过。
+// 直接写 el('xxx').addEventListener 在元素缺失时会抛 TypeError，
+// 把后面所有绑定一起带死（曾经导致「保存」按钮点不动）。
+const on = (id, evt, handler) => {
+  const node = el(id);
+  if (!node) { console.warn('[panel] 元素不存在，跳过绑定:', id); return; }
+  node.addEventListener(evt, handler);
+};
+
+// onSafe(id, fn)：确认元素存在后再执行，避免初始化中断
+const onSafe = (id, fn) => {
+  const node = el(id);
+  if (!node) { console.warn('[panel] 元素不存在，跳过:', id); return; }
+  fn(node);
+};
+
 /* ===================== 小工具 ===================== */
 
 // HTML 转义：所有来自后端/用户的数据都要过一遍，避免引号/尖括号把结构打坏
@@ -588,21 +640,21 @@ function setKey(k, reload) {
   }
 })();
 
-el('btnKeyTop').addEventListener('click', () => {
+on('btnKeyTop', 'click', () => {
   setKey(el('keyTop').value, true);
   toast('口令已保存', 'ok');
 });
-el('keyTop').addEventListener('keydown', (e) => {
+on('keyTop', 'keydown', (e) => {
   if (e.key === 'Enter') { setKey(el('keyTop').value, true); toast('口令已保存', 'ok'); }
 });
 
 /* ===================== 标签页切换 ===================== */
 const LOADERS = {
-  overview: loadOverview,
+  overview: async () => { await loadOverview(); await loadEffort(); await loadHealth(); },
   providers: loadProviders,
   accounts: loadAccountsTab,
   usage: loadUsage,
-  settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); },
+  settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); },
 };
 
 function switchTab(name) {
@@ -737,6 +789,110 @@ function renderCheckin(d, dry) {
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 
+// ---------- 健康状态横幅 ----------
+async function loadHealth() {
+  const box = el('healthBanner');
+  if (!box) return;
+  try {
+    const d = await api('/api/health');
+    box.style.display = 'block';
+    const lvl = d.bannerLevel || 'ok';
+    const isErr = lvl === 'err';
+    const isWarn = lvl === 'warn';
+    box.style.background = isErr ? 'rgba(248,81,73,.12)'
+      : isWarn ? 'rgba(210,153,34,.12)' : 'rgba(63,185,80,.10)';
+    box.style.border = '1px solid ' + (isErr ? '#f85149' : isWarn ? '#d29922' : '#3fb950');
+    box.style.color = isErr ? '#f85149' : isWarn ? '#d29922' : '#3fb950';
+    // 附上冷却详情
+    let detail = '';
+    (d.providers || []).forEach(p => {
+      if (p.state === 'exhausted' || p.state === 'partial') {
+        (p.accounts || []).forEach(a => {
+          if (a.state === 'cooling') {
+            detail += '<div style="font-size:11px;margin-top:4px;opacity:.85">' +
+              esc(p.name || p.id) + ' / ' + esc(a.name || a.id) + '：' +
+              '冷却至 ' + esc(a.coolUntil || '') +
+              (a.lastFailure ? '（' + esc(String(a.lastFailure).slice(0, 60)) + '）' : '') + '</div>';
+          }
+        });
+      }
+    });
+    const text = d.banner || ('一切正常 —— ' + (d.providers || []).length + ' 个供应商可用');
+    box.innerHTML = '<b>✓ ' + esc(text) + '</b>' + detail;
+  } catch (e) { box.style.display = 'none'; }
+}
+
+// ---------- 模型目录同步 ----------
+async function syncModels() {
+  const btn = el('btnSyncModels');
+  if (btn) btn.disabled = true;
+  el('syncMsg').innerHTML = '<span class="dim">正在从上游拉取模型目录…</span>';
+  try {
+    const d = await api('/api/providers/sync', { method: 'POST', body: {} });
+    const rows = d.providers || [];
+    let html = '';
+    rows.forEach(p => {
+      if (p.ok) {
+        const added = (p.added || []).length;
+        html += '<div class="kv"><span>' + esc(p.providerId) + '</span><span class="ok">' +
+          '拉到 ' + (p.fetched || 0) + ' 个，新增 ' + added + ' 个，共 ' + (p.total || 0) + ' 个' +
+          (p.warning ? ' <span class="dim">(' + esc(p.warning) + ')</span>' : '') + '</span></div>';
+      } else {
+        html += '<div class="kv"><span>' + esc(p.providerId) + '</span><span class="err">' +
+          esc(p.error || '失败') + '</span></div>';
+      }
+    });
+    el('syncMsg').innerHTML = html || '<span class="dim">没有可同步的供应商</span>';
+    toast('模型目录已同步，共 ' + (d.modelTotal || 0) + ' 个模型', 'ok');
+    // 刷新模型列表
+    if (typeof loadProviders === 'function') loadProviders();
+  } catch (e) {
+    el('syncMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+    toast(e.message, 'err');
+  } finally { if (btn) btn.disabled = false; }
+}
+
+// ---------- 思考强度 ----------
+async function loadEffort() {
+  const modeEl = el('effortMode'), lvEl = el('effortLevel');
+  if (!modeEl || !lvEl) return;
+  try {
+    const d = await api('/api/effort');
+    console.log('[effort] 后端返回', d);
+    // 选项已在 HTML 里写死，这里只回填当前值
+    const wantMode = d.mode || 'auto';
+    const wantEffort = d.effort || '';
+    modeEl.value = wantMode;
+    lvEl.value = wantEffort;
+    // 兜底：如果 value 赋值没生效（比如选项值不匹配），手动选中
+    if (modeEl.value !== wantMode) {
+      [...modeEl.options].forEach(o => { o.selected = (o.value === wantMode); });
+    }
+    if (lvEl.value !== wantEffort) {
+      console.log('[effort] 直接赋值失败，手动选中', wantEffort);
+      [...lvEl.options].forEach(o => { o.selected = (o.value === wantEffort); });
+    }
+    console.log('[effort] 实际显示 mode=', modeEl.value, 'effort=', lvEl.value);
+  } catch (e) {
+    el('effortMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+  }
+}
+
+async function saveEffort() {
+  const mode = el('effortMode').value;
+  const effort = el('effortLevel').value;
+  try {
+    const d = await api('/api/effort', { method: 'POST', body: { mode, effort } });
+    const label = (el('effortLevel').selectedOptions[0] || {}).textContent || effort || '跟随请求';
+    el('effortMsg').innerHTML = '<span class="ok">已保存：' + esc(mode) + ' / ' + esc(label) +
+      '（下一个请求生效，模型名后缀仍可单独覆盖）</span>';
+    toast('思考强度已保存', 'ok');
+  } catch (e) {
+    el('effortMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+    toast(e.message, 'err');
+  }
+}
+
 // ---------- WorkBuddy 任务中心 ----------
 function renderTasks(results) {
   let html = '';
@@ -760,7 +916,7 @@ function renderTasks(results) {
   return html || '<span class="dim">没有结果</span>';
 }
 
-el('btnRunTasks').addEventListener('click', async (e) => {
+on('btnRunTasks', 'click', async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
   el('taskSummary').innerHTML = '<span class="dim">正在跑全套任务（每号约 10 项，可能要一两分钟）…</span>';
@@ -779,7 +935,7 @@ el('btnRunTasks').addEventListener('click', async (e) => {
   } finally { btn.disabled = false; }
 });
 
-el('btnTaskStatus').addEventListener('click', async (e) => {
+on('btnTaskStatus', 'click', async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
   el('taskBox').innerHTML = '<span class="dim">加载中…</span>';
@@ -814,7 +970,7 @@ el('btnTaskStatus').addEventListener('click', async (e) => {
   } finally { btn.disabled = false; }
 });
 
-el('btnCheckin').addEventListener('click', async (e) => {
+on('btnCheckin', 'click', async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
   el('checkinSummary').innerHTML = '<span class="dim">正在逐个签到（每账号约 1.2 秒节流）…</span>';
@@ -832,7 +988,7 @@ el('btnCheckin').addEventListener('click', async (e) => {
   }
 });
 
-el('btnCheckinStatus').addEventListener('click', async (e) => {
+on('btnCheckinStatus', 'click', async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
   el('checkinSummary').innerHTML = '<span class="dim">读取签到记录…</span>';
@@ -885,7 +1041,7 @@ function updateKindHint() {
   el('provHint').innerHTML = KIND_HINTS[k] || '未知 kind 会按原值往下走；一般选 openai / anthropic 就够用。';
 }
 
-el('fPkind').addEventListener('change', updateKindHint);
+on('fPkind', 'change', updateKindHint);
 
 function renderProviderSelect() {
   const sel = el('fAprov');
@@ -1007,12 +1163,12 @@ function renderAccountGroups() {
 }
 
 /* ---------- 供应商卡片上的事件（事件委托） ---------- */
-el('providerList').addEventListener('change', (e) => {
+on('providerList', 'change', (e) => {
   const t = e.target;
   if (t.dataset.act !== 'prov-toggle') return;
   toggleProvider(t.dataset.pid, t.checked);
 });
-el('providerList').addEventListener('click', (e) => {
+on('providerList', 'click', (e) => {
   const b = e.target.closest('button[data-act]');
   if (!b) return;
   const id = b.dataset.pid;
@@ -1029,11 +1185,11 @@ el('providerList').addEventListener('click', (e) => {
   }
 });
 // 账号开关在「账号」页也要生效
-el('accountGroups').addEventListener('change', (e) => {
+on('accountGroups', 'change', (e) => {
   const t = e.target;
   if (t.dataset.act === 'acc-toggle') toggleAccount(t.dataset.pid, t.dataset.aid, t.checked);
 });
-el('accountGroups').addEventListener('click', (e) => {
+on('accountGroups', 'click', (e) => {
   const b = e.target.closest('button[data-act="acc-del"]');
   if (b) deleteAccount(b.dataset.pid, b.dataset.aid);
 });
@@ -1098,9 +1254,9 @@ function resetProviderForm() {
   updateKindHint();
 }
 
-el('btnProvCancel').addEventListener('click', resetProviderForm);
+on('btnProvCancel', 'click', resetProviderForm);
 
-el('btnProvSave').addEventListener('click', async (e) => {
+on('btnProvSave', 'click', async (e) => {
   const btn = e.currentTarget;
   const id = el('fPid').value.trim();
   if (!id) { toast('供应商 id 不能为空', 'err'); el('fPid').focus(); return; }
@@ -1155,7 +1311,7 @@ async function deleteAccount(pid, aid) {
   }
 }
 
-el('btnAccountSave').addEventListener('click', async (e) => {
+on('btnAccountSave', 'click', async (e) => {
   const btn = e.currentTarget;
   const pid = el('fAprov').value;
   if (!pid) { toast('先选一个供应商', 'err'); return; }
@@ -1213,7 +1369,7 @@ async function loadPool() {
     box.innerHTML = '<div class="err">读取失败：' + esc(e.message) + '</div>';
   }
 }
-el('btnPool').addEventListener('click', loadPool);
+on('btnPool', 'click', loadPool);
 
 /* =====================================================================
    登录流程（Trae / GitHub Copilot）
@@ -1645,15 +1801,18 @@ async function pollOnce(kind, start, gen, extra) {
   }
 }
 
-el('btnSavePrompt').addEventListener('click', savePrompt);
-el('btnPresetM0SS').addEventListener('click', presetM0SS);
-el('btnReloadPrompt').addEventListener('click', loadPrompt);
-el('promptText').addEventListener('input', () => { el('promptLen').textContent = '（' + el('promptText').value.length + ' 字符）'; });
-el('btnNewKey').addEventListener('click', createKey);
-el('btnRefreshKeys').addEventListener('click', loadKeys);
-el('btnWorkBuddyLogin').addEventListener('click', startWorkBuddyFlow);
-el('btnTraeLogin').addEventListener('click', startTraeFlow);
-el('btnCopilotLogin').addEventListener('click', startCopilotFlow);
+on('btnSyncModels', 'click', syncModels);
+on('btnSaveEffort', 'click', saveEffort);
+on('btnReloadEffort', 'click', loadEffort);
+on('btnSavePrompt', 'click', savePrompt);
+on('btnPresetM0SS', 'click', presetM0SS);
+on('btnReloadPrompt', 'click', loadPrompt);
+on('promptText', 'input', () => { el('promptLen').textContent = '（' + el('promptText').value.length + ' 字符）'; });
+on('btnNewKey', 'click', createKey);
+on('btnRefreshKeys', 'click', loadKeys);
+on('btnWorkBuddyLogin', 'click', startWorkBuddyFlow);
+on('btnTraeLogin', 'click', startTraeFlow);
+on('btnCopilotLogin', 'click', startCopilotFlow);
 // 第二批 8 家（antigravity / catpaw / cline / codex / minimax / qoder / raccoon / wenxin）：
 // 按钮上的 data-authflow 直接就是 vendor 名
 document.querySelectorAll('[data-authflow]').forEach((b) => {
@@ -1703,9 +1862,9 @@ async function loadUsage() {
   }
 }
 
-el('btnUsageRefresh').addEventListener('click', loadUsage);
+on('btnUsageRefresh', 'click', loadUsage);
 
-el('btnUsageReset').addEventListener('click', async () => {
+on('btnUsageReset', 'click', async () => {
   if (!confirm('清空所有用量计数？只影响面板统计，不影响配置。')) return;
   try {
     await api('/api/usage/reset', { method: 'POST', body: '{}' });
@@ -1759,7 +1918,7 @@ async function saveConfig(patch) {
   return r;
 }
 
-el('btnSaveKey').addEventListener('click', async (e) => {
+on('btnSaveKey', 'click', async (e) => {
   const btn = e.currentTarget;
   const v = el('fNewKey').value.trim();
   if (!v) { toast('新口令为空：留空表示不修改', 'warn'); return; }
@@ -1777,12 +1936,12 @@ el('btnSaveKey').addEventListener('click', async (e) => {
   }
 });
 
-el('btnClearKey').addEventListener('click', () => {
+on('btnClearKey', 'click', () => {
   setKey('', false);
   toast('已清除本机保存的口令', 'ok');
 });
 
-el('btnSaveListen').addEventListener('click', async (e) => {
+on('btnSaveListen', 'click', async (e) => {
   const btn = e.currentTarget;
   const host = el('fHost').value.trim();
   const portRaw = el('fPort').value.trim();
@@ -1807,13 +1966,18 @@ el('btnSaveListen').addEventListener('click', async (e) => {
 /* =====================================================================
    启动
    ===================================================================== */
-renderKindSelect();
-switchTab('overview');
+// 初始化：任何一步失败都不该让整个面板死掉
+try { renderKindSelect(); } catch (e) { console.error('renderKindSelect 失败', e); }
+try { switchTab('overview'); } catch (e) { console.error('switchTab 失败', e); }
 
-// 总览每 15 秒自动刷新（只在总览页且页面可见时）
-setInterval(() => {
-  if (S.tab === 'overview' && document.visibilityState === 'visible') loadOverview();
-}, 15000);
+// 不轮询：只在打开面板 / 切回本页时刷新一次
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    loadOverview();
+    loadHealth();
+  }
+});
+window.addEventListener('focus', () => { loadHealth(); });
 </script>
 </body>
 </html>

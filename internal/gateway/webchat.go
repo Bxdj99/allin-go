@@ -32,19 +32,21 @@ import (
 )
 
 // forwardWebChat 处理三家网页版协议的聊天请求。
-func (s *Server) forwardWebChat(w http.ResponseWriter, r *http.Request, p *config.Provider, kind, realModel string, body []byte, stream bool, proto protocol) {
+func (s *Server) forwardWebChat(w http.ResponseWriter, r *http.Request, p *config.Provider, kind, realModel string, body []byte, stream bool, proto protocol, uc *usageCtx) {
 	// 客户端说 Anthropic 形态时先转成 OpenAI 请求内部使用。跨协议的流式仍然不支持，
 	// 口径跟 forward 里其它供应商保持一致，别让客户端以为能用。
 	needBridge := proto == protocolAnthropic
 	upstreamBody := body
 	if needBridge {
 		if stream {
+			uc.fail(p.ID, realModel)
 			s.fail(w, http.StatusBadRequest,
 				"当前版本还不支持跨协议的流式转换（客户端是 anthropic，上游是 openai），请把 stream 设为 false")
 			return
 		}
 		converted, err := bridge.AnthropicToOpenAI(body, realModel)
 		if err != nil {
+			uc.fail(p.ID, realModel)
 			s.fail(w, http.StatusBadRequest, "协议转换失败: "+err.Error())
 			return
 		}
@@ -65,6 +67,7 @@ func (s *Server) forwardWebChat(w http.ResponseWriter, r *http.Request, p *confi
 	case provider.KindAntigravity:
 		run = runAntigravity
 	default:
+		uc.fail(p.ID, realModel)
 		s.fail(w, http.StatusNotImplemented, "未知的网页版协议: "+kind)
 		return
 	}
@@ -72,6 +75,7 @@ func (s *Server) forwardWebChat(w http.ResponseWriter, r *http.Request, p *confi
 	for attempt := 0; attempt < maxAccountAttempts; attempt++ {
 		acct := s.pool.Pick(p, tried)
 		if acct == nil {
+			uc.fail(p.ID, realModel)
 			if attempt == 0 {
 				s.fail(w, http.StatusBadRequest, fmt.Sprintf("供应商 %s 没有可用账号", p.ID))
 			} else {
@@ -103,17 +107,23 @@ func (s *Server) forwardWebChat(w http.ResponseWriter, r *http.Request, p *confi
 		if err == nil {
 			s.pool.Success(p.ID, acct.ID)
 			if stream {
-				return // 内容已经边转边写给客户端了
+				// 内容已经边转边写给客户端了；用量从写出去的 SSE 里扫
+				uc.record(p.ID, realModel, true, gate.usage())
+				return
 			}
 			out := buf.Bytes()
+			u := usageFromJSON(out) // 聚合结果里带不带 usage 取决于供应商包
 			if needBridge {
 				converted, cerr := bridge.OpenAIToAnthropic(out, realModel)
 				if cerr != nil {
+					log.Printf("响应协议转换失败: %v", cerr)
+					uc.record(p.ID, realModel, false, u)
 					s.fail(w, http.StatusBadGateway, "响应协议转换失败: "+cerr.Error())
 					return
 				}
 				out = converted
 			}
+			uc.record(p.ID, realModel, true, u)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(out)
@@ -124,9 +134,11 @@ func (s *Server) forwardWebChat(w http.ResponseWriter, r *http.Request, p *confi
 		status := webChatStatus(err)
 		// 已经往客户端写过帧：状态码改不了了，只能记日志收尾。
 		if gate != nil && gate.opened {
+			uc.record(p.ID, realModel, false, gate.usage())
 			log.Printf("%s/%s 流式转发中断: %v", p.ID, acct.ID, err)
 			return
 		}
+		uc.fail(p.ID, realModel)
 		s.pool.Fail(p.ID, acct.ID, status, truncate(err.Error(), 160))
 		log.Printf("%s/%s 上游失败（http=%d）: %v", p.ID, acct.ID, status, err)
 		// 请求内容不被协议支持 / 能力未实现：换号也没用，直接回，别拿账号池空转。
@@ -135,6 +147,7 @@ func (s *Server) forwardWebChat(w http.ResponseWriter, r *http.Request, p *confi
 			return
 		}
 	}
+	uc.fail(p.ID, realModel)
 	s.fail(w, webChatStatus(lastErr), fmt.Sprintf("供应商 %s 的所有账号尝试均失败: %v", p.ID, lastErr))
 }
 
@@ -206,6 +219,7 @@ type streamGate struct {
 	flusher  http.Flusher
 	canFlush bool
 	opened   bool
+	insp     sseInspector // 顺带扫写出去的 SSE，拿 token 用量
 }
 
 // newStreamGate 包装客户端的 ResponseWriter。
@@ -213,6 +227,9 @@ func newStreamGate(w http.ResponseWriter) *streamGate {
 	f, ok := w.(http.Flusher)
 	return &streamGate{w: w, flusher: f, canFlush: ok}
 }
+
+// usage 返回这条流里扫到的 token 用量（没扫到就是 0）。
+func (g *streamGate) usage() usageTokens { return g.insp.result() }
 
 // Write 第一次写入时补响应头，之后每写一次就 flush（客户端才能看到逐字输出）。
 func (g *streamGate) Write(p []byte) (int, error) {
@@ -224,6 +241,7 @@ func (g *streamGate) Write(p []byte) (int, error) {
 		g.w.Header().Set("X-Accel-Buffering", "no")
 		g.w.WriteHeader(http.StatusOK)
 	}
+	g.insp.feed(p)
 	n, err := g.w.Write(p)
 	if g.canFlush {
 		g.flusher.Flush()
