@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -98,13 +99,26 @@ func init() {
 	// 所有供应商包共用同一份带内置 CA 的 Transport。
 	// 静态二进制在 Android 上找不到系统根证书（证书在 /system/etc/security/cacerts，
 	// 而 Go 只认 /etc/ssl/certs），不统一注入就会全员 x509 失败。
+	// 连接层加固：参数取自 wb2api 的实测经验（internal/upstream/transport.go）
+	//   - 默认 Dialer 没有连接上限，半死 TCP 能让单次 TTFB 卡到 900 秒以上
+	//   - 默认 keepalive 2 小时才发首个探测，NAT 黑洞里的死连接会被一直复用
+	//   - ResponseHeaderTimeout 管「首字节到达前」，SSE 头到达后的长流不受影响
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second, // 连不上就快速失败去换号，别干等
+		KeepAlive: 15 * time.Second, // 让死连接在 15~30 秒内被内核掐掉
+	}
 	sharedTransport := &http.Transport{
-		Proxy:                 nil,
+		Proxy:       nil,
+		DialContext: dialer.DialContext,
+		// 空闲连接保留 30s：WAF 风暴后上游常掐闲置连接，90s 池里多半已是死连接
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 3 * time.Second,
+		// 聊天 SSE 首字节前的硬上限。观测到慢模型冷启动最坏 16s，取 60s 留余量；
+		// 同时把「半死连接卡死」从 2 分钟压到 1 分钟，配合 3 次换号最坏 3 分钟。
+		ResponseHeaderTimeout: 60 * time.Second,
 		MaxIdleConns:          64,
 		MaxIdleConnsPerHost:   8,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   15 * time.Second,
-		ExpectContinueTimeout: 3 * time.Second,
 		ForceAttemptHTTP2:     true,
 		TLSClientConfig:       &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 	}

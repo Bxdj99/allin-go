@@ -747,27 +747,81 @@ func (f *flushWriter) Write(p []byte) (int, error) {
 //
 // onChunk 可为 nil；提供时每读到一块就先回调（用于边转发边抽 SSE 的 usage），
 // 回调里只允许做轻量扫描，不能改动字节内容。
+// sseIdleTimeout 是流式响应「上游多久没吐数据就认为它死了」的上限。
+// 上游卡住时 body.Read 会永久阻塞，客户端只能干等到自己超时断开——
+// 表现就是「回答到一半突然中断」。设上限后能主动收尾并写一条错误事件。
+const sseIdleTimeout = 90 * time.Second
+
+// sseHeartbeat 是空闲时向客户端写 SSE 注释的间隔。
+// 中间层（尤其移动网络、反向代理）会掐掉长时间无数据的连接，定期发心跳能保住。
+const sseHeartbeat = 15 * time.Second
+
 func flushCopy(w http.ResponseWriter, body io.Reader, onChunk func([]byte)) {
 	flusher, canFlush := w.(http.Flusher)
 	buf := make([]byte, 32*1024)
+
 	for {
-		n, rerr := body.Read(buf)
-		if n > 0 {
-			if onChunk != nil {
-				onChunk(buf[:n])
+		// 把阻塞读放进 goroutine，外面用 select 做超时与心跳
+		type readResult struct {
+			n   int
+			err error
+		}
+		ch := make(chan readResult, 1)
+		go func() {
+			n, err := body.Read(buf)
+			ch <- readResult{n, err}
+		}()
+
+		heartbeat := time.NewTimer(sseHeartbeat)
+		deadline := time.NewTimer(sseIdleTimeout)
+
+		var res readResult
+	waitLoop:
+		for {
+			select {
+			case res = <-ch:
+				heartbeat.Stop()
+				deadline.Stop()
+				break waitLoop
+			case <-heartbeat.C:
+				// 上游还没吐数据，先给客户端发个 SSE 注释保活
+				if canFlush {
+					if _, werr := w.Write([]byte(": keepalive\n\n")); werr != nil {
+						heartbeat.Stop()
+						deadline.Stop()
+						return
+					}
+					flusher.Flush()
+				}
+				heartbeat.Reset(sseHeartbeat)
+			case <-deadline.C:
+				log.Printf("流式响应超过 %s 没有数据，主动收尾", sseIdleTimeout)
+				heartbeat.Stop()
+				// 告诉客户端这是异常结束，别让它一直等
+				if canFlush {
+					_, _ = w.Write([]byte("data: {\"error\":{\"message\":\"上游长时间无响应，已中断\",\"type\":\"gateway_timeout\"}}\n\n"))
+					flusher.Flush()
+				}
+				return
 			}
-			if _, werr := w.Write(buf[:n]); werr != nil {
+		}
+
+		if res.n > 0 {
+			if onChunk != nil {
+				onChunk(buf[:res.n])
+			}
+			if _, werr := w.Write(buf[:res.n]); werr != nil {
 				return
 			}
 			if canFlush {
 				flusher.Flush()
 			}
 		}
-		if rerr == io.EOF {
+		if res.err == io.EOF {
 			return
 		}
-		if rerr != nil {
-			log.Printf("上游读取中断: %v", rerr)
+		if res.err != nil {
+			log.Printf("上游读取中断: %v", res.err)
 			return
 		}
 	}
