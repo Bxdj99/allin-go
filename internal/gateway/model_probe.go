@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -15,19 +16,22 @@ import (
 
 // 模型可用性探测。
 //
-// 背景：拉到的模型列表不等于「能用」。上游会按账号类型限制：
+// 背景：拉到的模型列表不等于「能用」。上游会按账号类型/额度限制：
 //
-//	code 11158  model not allowed for user type [personal_free_user]
-//	code 11102  service info not found
+//	11158  model not allowed for user type
+//	11102  service info not found
+//	6004   使用量已超出频率限制
 //
-// 用户看到一堆模型实际大半调不通。这里提供一个主动探测接口：
-// 对每个模型发一个极小的请求（max_tokens=1），把结果标成可用/受限/不存在。
+// 这里提供一个主动探测接口：真的发一次请求，把结果标成可用/受限。
+//
+// 支持范围：WorkBuddy 走专用探测（能识别业务错误码），其它供应商走
+// 通用网关自调用探测（走完整的 forward 路径，能反映真实可用性）。
 
 // ModelProbe 是单个模型的探测结果。
 type ModelProbe struct {
 	Model  string `json:"model"`
 	OK     bool   `json:"ok"`
-	Status string `json:"status"` // ok / not_allowed / not_found / error
+	Status string `json:"status"` // ok / not_allowed / not_found / rate_limited / empty / error
 	Code   int    `json:"code,omitempty"`
 	Msg    string `json:"msg,omitempty"`
 	MS     int64  `json:"ms"`
@@ -36,7 +40,7 @@ type ModelProbe struct {
 // handleModelProbe 探测一批模型是否可用。
 //
 //	POST /api/providers/models/probe
-//	{"providerId":"workbuddy","accountId":"可选","models":["a","b"]}   不传 models 就探全部
+//	{"providerId":"workbuddy","accountId":"可选","models":["a","b"]}
 func (s *Server) handleModelProbe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "只支持 POST"})
@@ -57,27 +61,6 @@ func (s *Server) handleModelProbe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "供应商不存在"})
 		return
 	}
-	if workbuddyProviderKind(p) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "目前只支持 WorkBuddy 系列的可用性探测"})
-		return
-	}
-
-	// 选账号：优先指定的，否则第一个可用的
-	var acc *config.Account
-	for _, a := range p.Accounts {
-		if a == nil || !a.IsEnabled() || a.Key() == "" || a.UID == "" {
-			continue
-		}
-		if in.AccountID != "" && a.ID != in.AccountID {
-			continue
-		}
-		acc = a
-		break
-	}
-	if acc == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "没有可用账号"})
-		return
-	}
 
 	models := in.Models
 	if len(models) == 0 {
@@ -87,23 +70,45 @@ func (s *Server) handleModelProbe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "results": []any{}, "note": "没有要探测的模型"})
 		return
 	}
-	// 上限保护：一次最多探 80 个，避免把上游打爆
 	if len(models) > 80 {
 		models = models[:80]
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Minute)
 	defer cancel()
 
-	cust := workbuddy.NewCustomer(acc.UID, acc.Key(), acc.Domain, "", "", p.ID == "workbuddy-ai")
+	// WorkBuddy 走专用探测（能拿业务码）；其它家走通用探测
+	wbKind := workbuddyProviderKind(p) != ""
+	var probeFn func(model string) ModelProbe
+
+	if wbKind {
+		var acc *config.Account
+		for _, a := range p.Accounts {
+			if a == nil || !a.IsEnabled() || a.Key() == "" || a.UID == "" {
+				continue
+			}
+			if in.AccountID != "" && a.ID != in.AccountID {
+				continue
+			}
+			acc = a
+			break
+		}
+		if acc == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "没有可用账号"})
+			return
+		}
+		cust := workbuddy.NewCustomer(acc.UID, acc.Key(), acc.Domain, "", "", p.ID == "workbuddy-ai")
+		probeFn = func(model string) ModelProbe { return probeWorkBuddyModel(ctx, cust, model) }
+	} else {
+		probeFn = func(model string) ModelProbe { return s.probeViaGateway(ctx, p.ID, model) }
+	}
 
 	type res struct {
 		idx   int
 		probe ModelProbe
 	}
 	ch := make(chan res, len(models))
-	// 并发 4 个，兼顾速度与不触发风控
-	sem := make(chan struct{}, 4)
+	sem := make(chan struct{}, 4) // 并发 4，兼顾速度与不触发风控
 	var wg sync.WaitGroup
 	for i, m := range models {
 		wg.Add(1)
@@ -111,7 +116,7 @@ func (s *Server) handleModelProbe(w http.ResponseWriter, r *http.Request) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			ch <- res{idx: idx, probe: probeOneModel(ctx, cust, model)}
+			ch <- res{idx: idx, probe: probeFn(model)}
 		}(i, m)
 	}
 	go func() { wg.Wait(); close(ch) }()
@@ -130,7 +135,6 @@ func (s *Server) handleModelProbe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		// 可用的排前面
 		if out[i].OK != out[j].OK {
 			return out[i].OK
 		}
@@ -138,25 +142,25 @@ func (s *Server) handleModelProbe(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":      true,
-		"account": acc.Name,
-		"total":   len(out),
-		"usable":  okCount,
-		"unusable": badCount,
-		"results": out,
-		"hint":    "可用 = 上游接受并返回了内容；受限 = 账号类型不允许；不存在 = 该站没有这个模型",
+		"ok":        true,
+		"provider":  p.ID,
+		"total":     len(out),
+		"usable":    okCount,
+		"unusable":  badCount,
+		"results":   out,
+		"supported": wbKind,
+		"hint": "可用 = 上游真的产出了内容；受限 = 账号类型不允许；" +
+			"不存在 = 该站没有这个模型；额度尽 = 被限流；空响应 = 上游接受但没产出",
 	})
 }
 
-// probeOneModel 发一个 max_tokens=1 的最小请求判断模型能不能用。
-func probeOneModel(ctx context.Context, c workbuddy.Customer, model string) ModelProbe {
+// probeWorkBuddyModel 用最小请求判断 WorkBuddy 模型能不能用。
+//
+// 注意 max_tokens 不能给太小：推理类模型 1 个 token 连首帧都不产生，
+// 上游也不做完整校验，会误判成「可用」。
+func probeWorkBuddyModel(ctx context.Context, c workbuddy.Customer, model string) ModelProbe {
 	start := time.Now()
 	mp := ModelProbe{Model: model}
-	// 用足够大的输出预算做真实请求。
-	//
-	// 教训：一开始只发 max_tokens=1，上游对这么小的请求不做完整校验
-	// （尤其推理类模型，1 个 token 连首帧都不产生），于是「检测通过」
-	// 但用户真用的时候被拒。现在给 64，并且要求真读到内容。
 	body := map[string]any{
 		"model":      model,
 		"messages":   []map[string]any{{"role": "user", "content": "1+1=?"}},
@@ -170,7 +174,6 @@ func probeOneModel(ctx context.Context, c workbuddy.Customer, model string) Mode
 		mp.Msg = truncateStr(err.Error(), 120)
 		return mp
 	}
-	// Chat 返回的是原始响应信封，解析 code/msg
 	var env struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
@@ -183,15 +186,13 @@ func probeOneModel(ctx context.Context, c workbuddy.Customer, model string) Mode
 			mp.Status = "not_allowed"
 		case 11102:
 			mp.Status = "not_found"
-		case 6004:
+		case 6004, 4011:
 			mp.Status = "rate_limited"
 		default:
 			mp.Status = "error"
 		}
 		return mp
 	}
-	// 光有 200 不够，要确认流里真的产出了内容
-	// （上游可能返回一帧 role 然后静默结束）
 	if !streamHasContent(raw) {
 		mp.Status = "empty"
 		mp.Msg = "上游接受了请求但没有产出内容（可能额度不足或模型不可用）"
@@ -199,6 +200,95 @@ func probeOneModel(ctx context.Context, c workbuddy.Customer, model string) Mode
 	}
 	mp.OK = true
 	mp.Status = "ok"
+	return mp
+}
+
+// probeViaGateway 用通用路径探测：直接打自己的 /v1/chat/completions。
+//
+// 好处是走完整链路（含认证、协议转换、各家 relay），坏处是拿不到业务码，
+// 只能根据 HTTP 状态与错误文本归类。
+func (s *Server) probeViaGateway(ctx context.Context, providerID, model string) ModelProbe {
+	start := time.Now()
+	mp := ModelProbe{Model: model}
+
+	port := s.listenPort()
+	if port <= 0 {
+		mp.Status = "error"
+		mp.Msg = "网关端口未知"
+		return mp
+	}
+	// Go 版没有独立管理凭据，用配置里的 authKey
+	key := s.store.Snapshot().Server.AuthKey
+	if key == "" {
+		mp.Status = "error"
+		mp.Msg = "网关没有设置口令"
+		return mp
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"model":      providerID + "/" + model,
+		"messages":   []map[string]any{{"role": "user", "content": "1+1=?"}},
+		"max_tokens": 64,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"http://127.0.0.1:"+itoaPort(port)+"/v1/chat/completions", strings.NewReader(string(payload)))
+	if err != nil {
+		mp.Status = "error"
+		mp.Msg = err.Error()
+		return mp
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := probeHTTPClient.Do(req)
+	mp.MS = time.Since(start).Milliseconds()
+	if err != nil {
+		mp.Status = "error"
+		mp.Msg = truncateStr(err.Error(), 120)
+		return mp
+	}
+	defer resp.Body.Close()
+	raw, _ := readLimited(resp.Body, 8192)
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		// 成功也可能是空内容
+		var env struct {
+			Choices []struct {
+				Message struct {
+					Content   string `json:"content"`
+					Reasoning string `json:"reasoning_content"`
+					ToolCalls []any  `json:"tool_calls"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal(raw, &env) == nil && len(env.Choices) > 0 {
+			m := env.Choices[0].Message
+			if m.Content != "" || m.Reasoning != "" || len(m.ToolCalls) > 0 {
+				mp.OK = true
+				mp.Status = "ok"
+				return mp
+			}
+		}
+		mp.Status = "empty"
+		mp.Msg = "上游接受了请求但没有产出内容"
+		return mp
+	}
+
+	text := string(raw)
+	mp.Msg = truncateStr(text, 150)
+	switch {
+	case resp.StatusCode == 429 || strings.Contains(text, "429") ||
+		strings.Contains(text, "频率") || strings.Contains(text, "额度"):
+		mp.Status = "rate_limited"
+	case resp.StatusCode == 401 || resp.StatusCode == 403:
+		mp.Status = "auth_failed"
+	case strings.Contains(text, "not allowed") || strings.Contains(text, "not_allowed"):
+		mp.Status = "not_allowed"
+	case strings.Contains(text, "not found") || strings.Contains(text, "not_found"):
+		mp.Status = "not_found"
+	default:
+		mp.Status = "error"
+	}
 	return mp
 }
 
@@ -227,7 +317,7 @@ func streamHasContent(raw []byte) bool {
 			continue
 		}
 		if ch.Code != 0 {
-			return false // 流里夹了业务错误
+			return false
 		}
 		for _, c := range ch.Choices {
 			if c.Delta.Content != "" || c.Delta.Reasoning != "" || len(c.Delta.ToolCalls) > 0 {
@@ -246,7 +336,7 @@ func truncateStr(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// workbuddyProviderKind 判断是否 WorkBuddy 系列，返回规范化的 kind。
+// workbuddyProviderKind 判断是否 WorkBuddy 系列。
 func workbuddyProviderKind(p *config.Provider) string {
 	if p == nil {
 		return ""
@@ -259,4 +349,18 @@ func workbuddyProviderKind(p *config.Provider) string {
 		return "workbuddy"
 	}
 	return ""
+}
+
+// probeHTTPClient 是探测用的 HTTP 客户端（本地回环，不设总超时靠 ctx 控制）。
+var probeHTTPClient = &http.Client{Timeout: 90 * time.Second}
+
+// listenPort 返回当前实际监听端口。
+func (s *Server) listenPort() int {
+	cfg := s.store.Snapshot()
+	return cfg.Server.Port
+}
+
+// readLimited 读最多 n 字节。
+func readLimited(r io.Reader, n int) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(r, int64(n)))
 }

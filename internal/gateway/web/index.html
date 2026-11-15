@@ -1212,23 +1212,59 @@ async function saveOverviewPicks() {
   }
 }
 
+// 确保 S.providers 有数据（总览页不会主动加载供应商列表）
+async function ensureProviders() {
+  if (Array.isArray(S.providers) && S.providers.length) return S.providers;
+  try {
+    const d = await api('/api/providers');
+    S.providers = d.providers || [];
+  } catch (e) {
+    S.providers = [];
+  }
+  return S.providers;
+}
+
 async function probeOverviewModels() {
-  const picks = collectOverviewPicks();
-  const provs = (S.providers || []).filter((p) => (p.models || []).length);
-  const target = provs.find((p) => p.id === 'workbuddy') || provs[0];
-  if (!target) { toast('没有供应商', 'warn'); return; }
   const btn = el('btnOvProbe');
   const old = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '检测中…'; }
+  if (btn) { btn.disabled = true; btn.textContent = '同步中…'; }
   try {
-    const d = await api('/api/providers/models/probe', {
-      method: 'POST', body: { providerId: target.id, models: target.models }
-    });
+    // 先同步上游目录，避免「本地没有模型可检测」的尴尬
+    await ensureProviders();
+    let provs = (S.providers || []).filter((p) => (p.models || []).length);
+    if (!provs.length) {
+      if (btn) btn.textContent = '拉取目录…';
+      try {
+        await api('/api/providers/sync', { method: 'POST', body: {} });
+        const d2 = await api('/api/providers');
+        S.providers = d2.providers || [];
+        provs = S.providers.filter((p) => (p.models || []).length);
+      } catch (e) { /* 同步失败继续，可能账号没凭据 */ }
+    }
+    if (!provs.length) {
+      toast('没有可检测的模型 —— 先在「供应商」页添加账号并同步目录', 'warn');
+      return;
+    }
+
+    // 逐个供应商检测（面板一次只显示一个供应商的勾选，这里把有模型的都测）
+    if (btn) btn.textContent = '检测中…';
     probeResults = {};
-    (d.results || []).forEach((r) => { probeResults[target.id + '/' + r.model] = r; });
-    toast(target.name + '：可用 ' + d.usable + ' / 不可用 ' + d.unusable, d.unusable ? 'warn' : 'ok');
-    // 按当前实际暴露列表重绘（S.models 就是 /v1/models 的结果）
-    renderOverviewModels(S.models.slice());
+    let totalOk = 0, totalBad = 0;
+    for (const p of provs) {
+      try {
+        const d = await api('/api/providers/models/probe', {
+          method: 'POST', body: { providerId: p.id, models: p.models }
+        });
+        (d.results || []).forEach((r) => { probeResults[p.id + '/' + r.model] = r; });
+        totalOk += d.usable || 0;
+        totalBad += d.unusable || 0;
+      } catch (e) {
+        // 单家失败不影响其它
+      }
+    }
+    toast('检测完成：可用 ' + totalOk + ' / 不可用 ' + totalBad, totalBad ? 'warn' : 'ok');
+    // 重绘：用当前 /v1/models 结果作为「已勾选」基准
+    try { await loadOverview(); } catch (e) { /* 忽略 */ }
   } catch (e) {
     toast(e.message, 'err');
   } finally {
