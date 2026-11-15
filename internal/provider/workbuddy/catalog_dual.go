@@ -16,9 +16,9 @@ import (
 //	国际站 www.workbuddy.ai   + CLI UA → 25 个
 //	国际站 www.workbuddy.ai   + IDE UA → 12 个
 //
-// 账号的 realm 只决定「默认用哪个站」，不代表另一个站拿不到东西。
-// 所以这里两站都探一遍取并集：国际号也能用国内站的完整目录
-// （能不能真正调通是另一回事，但至少模型列表要全，用户可以选择试）。
+// **必须严格按账号 realm 走**，不能跨站合并 —— 跨站的模型名字在本站不存在，
+// 调用会返回 11102 / 11158，用户以为能用实际全废。
+// 同一站内仍然并发探 /v3/config 与企业端点，这两个是真互补的。
 
 // CatalogProbe 是一次探测的明细，供诊断接口展示。
 type CatalogProbe struct {
@@ -46,15 +46,16 @@ func FetchCatalogWithProbes(ctx context.Context, origin string, acc *Account) (*
 		return nil, fmt.Errorf("账号缺少访问令牌")
 	}
 
-	// 候选站点：优先账号自己的站，再补另一个站
+	// 只探账号自己所属的站。
+	//
+	// 历史教训（v1.6.1）：曾经试过「两站都探、取并集」，结果国内账号
+	// 拿到了国际站独有的模型（gpt-6-astra / grok-4.7 / gemini-4-carbon 等），
+	// 这些模型在国内站根本不存在，调用直接 code=11102「service info not found」
+	// 或 11158「not allowed for user type」。用户看到一堆模型但大半用不了。
+	//
+	// 所以现在严格按 realm 走：国内号只拉国内站，国际号只拉国际站。
 	primary := OriginFor(origin, acc)
-	var candidates []string
-	candidates = append(candidates, primary)
-	if !strings.Contains(primary, "workbuddy.ai") {
-		candidates = append(candidates, "https://www.workbuddy.ai")
-	} else {
-		candidates = append(candidates, "https://copilot.tencent.com")
-	}
+	candidates := []string{primary}
 
 	type probeResult struct {
 		base  string

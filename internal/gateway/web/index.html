@@ -386,6 +386,7 @@
       <button class="btn" id="btnSyncModels">同步上游模型目录</button>
       <button class="btn" id="btnDiagnoseCatalog">诊断模型目录</button>
       <button class="btn primary" id="btnQuickAdd">快捷添加常用供应商</button>
+      <button class="btn" id="btnProbeModels">检测模型可用性</button>
       <div id="syncMsg" style="width:100%;margin-top:8px"></div>
       <div id="diagBox" style="width:100%;margin-top:8px"></div></div>
   </div>
@@ -1070,6 +1071,51 @@ async function syncModels() {
   } catch (e) {
     el('syncMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
     toast(e.message, 'err');
+  } finally { if (btn) btn.disabled = false; }
+}
+
+// ---------- 模型可用性检测 ----------
+async function probeModels() {
+  const btn = el('btnProbeModels');
+  if (btn) btn.disabled = true;
+  el('diagBox').innerHTML = '<div class="dim" style="font-size:12px">正在逐个模型实测可用性…（可能要 1-2 分钟）</div>';
+  try {
+    const d = await api('/api/providers/models/probe', { method: 'POST', body: { providerId: 'workbuddy' } });
+    const rows = d.results || [];
+    if (!rows.length) {
+      el('diagBox').innerHTML = '<span class="dim">没有可检测的模型</span>';
+      return;
+    }
+    const okModels = rows.filter(r => r.ok).map(r => r.model);
+    let html = '<div style="font-size:13px;margin-bottom:8px">' +
+      '<span class="ok">可用 ' + d.usable + '</span> / ' +
+      '<span class="err">不可用 ' + d.unusable + '</span> / 共 ' + d.total + '</div>';
+
+    html += '<div class="card" style="margin:0;background:#0b0f14;padding:10px">' +
+      '<div style="font-size:12px;margin-bottom:6px" class="ok">✅ 可用</div>' +
+      (okModels.length ? okModels.map(m => '<div style="font-size:11px;padding:1px 0">' + esc(m) + '</div>').join('')
+                       : '<div class="dim" style="font-size:11px">没有可用的模型</div>') +
+      '</div>';
+
+    const bad = rows.filter(r => !r.ok);
+    if (bad.length) {
+      html += '<div class="card" style="margin:8px 0 0;background:#0b0f14;padding:10px">' +
+        '<div style="font-size:12px;margin-bottom:6px" class="err">❌ 不可用</div>';
+      bad.forEach(r => {
+        const label = r.status === 'not_allowed' ? '账号类型不允许'
+          : r.status === 'not_found' ? '本站没有该模型'
+          : r.status === 'rate_limited' ? '额度用完'
+          : '错误';
+        html += '<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0">' +
+          '<span>' + esc(r.model) + '</span>' +
+          '<span class="dim">' + label + (r.code ? ' (' + r.code + ')' : '') + '</span></div>';
+      });
+      html += '</div>';
+    }
+    el('diagBox').innerHTML = html + '<div class="dim" style="font-size:11px;margin-top:6px">' +
+      '「额度用完」不是模型问题，换号或等重置即可；「本站没有该模型」说明它属于另一个区域的站点。</div>';
+  } catch (e) {
+    el('diagBox').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
   } finally { if (btn) btn.disabled = false; }
 }
 
@@ -2335,6 +2381,7 @@ async function pollOnce(kind, start, gen, extra) {
 
 on('btnSyncModels', 'click', syncModels);
 on('autoCheckinToggle', 'change', toggleAutoCheckin);
+on('btnProbeModels', 'click', probeModels);
 on('btnQuickAdd', 'click', quickAddPreset);
 on('btnDiagnoseCatalog', 'click', diagnoseCatalog);
 on('btnRefreshCredits', 'click', loadCredits);
