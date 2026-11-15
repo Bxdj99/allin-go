@@ -385,6 +385,7 @@
     
       <button class="btn" id="btnSyncModels">同步上游模型目录</button>
       <button class="btn" id="btnDiagnoseCatalog">诊断模型目录</button>
+      <button class="btn primary" id="btnQuickAdd">快捷添加常用供应商</button>
       <div id="syncMsg" style="width:100%;margin-top:8px"></div>
       <div id="diagBox" style="width:100%;margin-top:8px"></div></div>
   </div>
@@ -597,6 +598,11 @@ const S = {
   tab: 'overview', editing: null, expanded: new Set(),
   poll: { gen: 0, timer: 0, startedAt: 0, deadlineAt: 0 },
 };
+
+// 面板级可变状态统一在这里声明（放最前面避免 TDZ：
+// 函数在声明前被调用时 let/const 会抛「Cannot access before initialization」，
+// 一抛就把后面所有事件绑定带死，表现就是「整个 UI 动不了」）
+let ccKeyShown = false; // 「客户端连接信息」卡片里 Key 是否明文显示
 
 const $ = (s) => document.querySelector(s);
 const el = (id) => document.getElementById(id);
@@ -959,9 +965,6 @@ async function loadHealth() {
 
 /* ---------- 客户端连接信息（总览页顶部大卡片） ---------- */
 
-// Key 是否明文显示（只在本次页面会话内有效，刷新回到打码）
-let ccKeyShown = false;
-
 // 打码：前 6 位 + ***；太短的整串打码，避免「打了码等于没打」
 function ccMask(s) {
   if (!s) return '';
@@ -1068,6 +1071,31 @@ async function syncModels() {
     el('syncMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
     toast(e.message, 'err');
   } finally { if (btn) btn.disabled = false; }
+}
+
+// ---------- 快捷添加常用供应商 ----------
+async function quickAddPreset() {
+  try {
+    const d = await api('/api/presets');
+    const list = d.presets || [];
+    const names = list.map((p, i) => (i + 1) + '. ' + p.name + (p.added ? '（已有）' : '')).join('\n');
+    const pick = prompt('选一个要添加的供应商（输入序号）：\n\n' + names, '1');
+    if (!pick) return;
+    const idx = parseInt(pick, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= list.length) { toast('序号不对', 'err'); return; }
+    const preset = list[idx];
+    let key = '';
+    if (preset.needsKey) {
+      key = prompt(preset.name + ' 的 API Key：\n\n' + (preset.note || ''), '');
+      if (key === null) return;
+      if (!key.trim()) { toast('需要填 Key', 'err'); return; }
+    }
+    const r = await api('/api/presets/apply', { method: 'POST', body: { id: preset.id, apiKey: key } });
+    toast(r.message || '已添加', 'ok');
+    loadProviders();
+  } catch (e) {
+    toast(e.message, 'err');
+  }
 }
 
 // ---------- 模型目录诊断 ----------
@@ -1218,7 +1246,14 @@ async function checkUpdate() {
     const d = await api('/api/update/check');
     el('verCurrent').textContent = d.current || '未知';
     if (d.error) {
-      el('verUpdate').innerHTML = '<span class="err">检查失败：' + esc(d.error) + '</span>';
+      let hint = '';
+      if (/连不上|timeout|TLS|EOF|connection/i.test(d.error || '')) {
+        hint = '<div class="dim" style="font-size:11px;margin-top:4px">' +
+          'GitHub 在你当前网络下不可达（国内直连经常断）。' +
+          '可以到 <a href="https://github.com/Bxdj99/allin-go/releases" target="_blank" rel="noopener noreferrer">Releases 页面</a>' +
+          ' 手动下载 zip 刷入。</div>';
+      }
+      el('verUpdate').innerHTML = '<span class="err">检查失败：' + esc(d.error) + '</span>' + hint;
       return;
     }
     if (!d.hasUpdate) {
@@ -2300,6 +2335,7 @@ async function pollOnce(kind, start, gen, extra) {
 
 on('btnSyncModels', 'click', syncModels);
 on('autoCheckinToggle', 'change', toggleAutoCheckin);
+on('btnQuickAdd', 'click', quickAddPreset);
 on('btnDiagnoseCatalog', 'click', diagnoseCatalog);
 on('btnRefreshCredits', 'click', loadCredits);
 on('btnCheckUpdate', 'click', checkUpdate);
