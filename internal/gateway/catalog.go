@@ -27,6 +27,7 @@ import (
 	"allin/internal/config"
 	"allin/internal/provider"
 	"allin/internal/provider/openaicatalog"
+	"allin/internal/provider/trae"
 	"allin/internal/provider/workbuddy"
 )
 
@@ -66,6 +67,8 @@ func (s *Server) syncProviderModels(ctx context.Context, p *config.Provider) ([]
 			return nil, "", fmt.Errorf("供应商未配置 kind")
 		}
 		return s.syncWorkBuddy(ctx, p)
+	case provider.KindTrae:
+		return s.syncTrae(ctx, p)
 	case provider.KindOpenAI:
 		base := p.BaseURL
 		if strings.TrimSpace(base) == "" {
@@ -443,4 +446,42 @@ func shortHost(o string) string {
 	o = strings.TrimPrefix(o, "http://")
 	o = strings.TrimSuffix(o, "/")
 	return o
+}
+
+// syncTrae 拉 Trae CN 的模型目录。
+//
+// 之前 Trae 的模型是硬编码占位值（claude-3.5-sonnet / gpt-4o），
+// Trae CN 根本不提供这两家模型，调不通。现在从
+// /api/ide/v1/batch_get_detail_param 真拉。
+func (s *Server) syncTrae(ctx context.Context, p *config.Provider) ([]string, string, error) {
+	var acc *config.Account
+	for _, a := range p.Accounts {
+		if a != nil && a.IsEnabled() && a.Key() != "" {
+			acc = a
+			break
+		}
+	}
+	if acc == nil {
+		return nil, "", fmt.Errorf("没有可用 Trae 账号（需要先登录）")
+	}
+
+	ta := &trae.Account{
+		UID: acc.UID, Token: acc.Key(),
+		DeviceID: acc.DeviceID, MachineID: acc.MachineID,
+		PublicKey: acc.PublicKey, PrivateKey: acc.PrivateKey,
+	}
+	entries, err := trae.FetchModels(ctx, ta)
+	if err != nil {
+		return nil, "", err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.Name != "" {
+			names = append(names, e.Name)
+		}
+	}
+	if len(names) == 0 {
+		return nil, "", fmt.Errorf("上游没有返回模型")
+	}
+	return names, fmt.Sprintf("拉到 %d 个模型（含 function 分组）", len(names)), nil
 }
