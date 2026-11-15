@@ -199,6 +199,8 @@
   /* 页面切换 */
   .page { display:none; }
   .page.active { display:block; }
+  .mchk.probed-ok { border-color:#3fb950 !important; }
+  .mchk.probed-bad { opacity:.6; }
 </style>
 </head>
 <body>
@@ -604,6 +606,8 @@ const S = {
 // 函数在声明前被调用时 let/const 会抛「Cannot access before initialization」，
 // 一抛就把后面所有事件绑定带死，表现就是「整个 UI 动不了」）
 let ccKeyShown = false; // 「客户端连接信息」卡片里 Key 是否明文显示
+// 模型可用性检测结果：model → {ok,status,code,msg}
+let probeResults = {};
 
 const $ = (s) => document.querySelector(s);
 const el = (id) => document.getElementById(id);
@@ -1632,21 +1636,42 @@ function modelFilterHtml(p, models) {
   const ex = exposedOf(p);
   const boxes = models.map((m) => {
     const on = ex.indexOf(m) >= 0;
-    return '<label class="mchk' + (on ? ' on' : '') + '">' +
+    // 检测过就带上状态标记
+    const pr = probeResults[m];
+    let badge = '';
+    let cls = 'mchk';
+    if (pr) {
+      if (pr.ok) {
+        badge = ' <span class="ok" style="font-size:10px">✓</span>';
+        cls += ' probed-ok';
+      } else {
+        const label = pr.status === 'not_allowed' ? '不允许'
+          : pr.status === 'not_found' ? '本站无'
+          : pr.status === 'rate_limited' ? '额度尽'
+          : '错误';
+        badge = ' <span class="err" style="font-size:10px">' + label + '</span>';
+        cls += ' probed-bad';
+      }
+    }
+    return '<label class="' + cls + (on ? ' on' : '') + '" title="' +
+      (pr ? esc(pr.status + (pr.msg ? ': ' + pr.msg : '')) : '') + '">' +
       '<input type="checkbox" data-act="model-chk" data-pid="' + esc(p.id) + '" data-model="' + esc(m) + '"' +
-      (on ? ' checked' : '') + '>' + esc(m) + '</label>';
+      (on ? ' checked' : '') + '>' + esc(m) + badge + '</label>';
   }).join('');
   return '<div class="msx" data-msx="' + esc(p.id) + '">' +
     '<div class="bar">' +
       '<span class="dim" style="font-size:11px;margin-right:auto">暴露给客户端：' +
         ex.length + ' / ' + models.length + '</span>' +
+      '<button class="btn sm" data-act="model-probe" data-pid="' + esc(p.id) + '">检测可用性</button>' +
+      '<button class="btn sm" data-act="model-onlyok" data-pid="' + esc(p.id) + '">只勾可用</button>' +
       '<button class="btn sm" data-act="model-all" data-pid="' + esc(p.id) + '">全选</button>' +
       '<button class="btn sm" data-act="model-none" data-pid="' + esc(p.id) + '">全不选</button>' +
       '<button class="btn sm primary" data-act="model-save" data-pid="' + esc(p.id) + '">保存筛选</button>' +
     '</div>' +
     '<div>' + boxes + '</div>' +
     '<div class="tips">只有勾中的模型会出现在 <code>/v1/models</code>，没勾中的模型名调用会被拒绝。' +
-      '保存结果写进配置的 <code>exposedModels</code>，不影响已同步的模型目录。</div>' +
+      '先点「检测可用性」实测哪些真能调（额度耗尽、账号类型不允许、本站没有的会标出来），' +
+      '再点「只勾可用」一键选好。</div>' +
   '</div>';
 }
 
@@ -1733,7 +1758,7 @@ on('providerList', 'change', (e) => {
   if (t.dataset.act !== 'prov-toggle') return;
   toggleProvider(t.dataset.pid, t.checked);
 });
-on('providerList', 'click', (e) => {
+on('providerList', 'click', async (e) => {
   const b = e.target.closest('button[data-act]');
   if (!b) return;
   const id = b.dataset.pid;
@@ -1744,6 +1769,52 @@ on('providerList', 'click', (e) => {
     if (box) {
       box.querySelectorAll('input[data-act="model-chk"]').forEach((x) => { x.checked = (act === 'model-all'); });
       syncModelChecks(box);
+    }
+    return;
+  }
+
+  if (act === 'model-onlyok') {
+    // 只勾可用的：需要先检测过
+    const box = b.closest('[data-msx]');
+    const pid = b.dataset.pid;
+    if (!box) return;
+    const probed = Object.keys(probeResults).length;
+    if (!probed) { toast('先点「检测可用性」', 'warn'); return; }
+    let n = 0;
+    box.querySelectorAll('input[data-act="model-chk"]').forEach((x) => {
+      const pr = probeResults[x.dataset.model];
+      const ok = !pr || pr.ok; // 没检测过的保持原状（这里按「可用」处理）
+      x.checked = ok;
+      if (ok) n++;
+    });
+    syncModelChecks(box);
+    toast('已勾选 ' + n + ' 个可用模型，点「保存筛选」生效', 'ok');
+    return;
+  }
+
+  if (act === 'model-probe') {
+    // 检测该供应商所有模型的可用性
+    const pid = b.dataset.pid;
+    const box = b.closest('[data-msx]');
+    const models = Array.from(box.querySelectorAll('input[data-act="model-chk"]'))
+      .map((x) => x.dataset.model);
+    if (!models.length) { toast('没有可检测的模型', 'warn'); return; }
+    b.disabled = true;
+    const old = b.textContent;
+    b.textContent = '检测中…（' + models.length + ' 个）';
+    try {
+      const d = await api('/api/providers/models/probe', {
+        method: 'POST', body: { providerId: pid, models: models }
+      });
+      probeResults = {};
+      (d.results || []).forEach((r) => { probeResults[r.model] = r; });
+      toast('可用 ' + d.usable + ' / 不可用 ' + d.unusable, d.unusable ? 'warn' : 'ok');
+      loadProviders(); // 重绘带标记的列表
+    } catch (e) {
+      toast(e.message, 'err');
+    } finally {
+      b.disabled = false;
+      b.textContent = old;
     }
     return;
   }
