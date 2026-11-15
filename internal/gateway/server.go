@@ -106,6 +106,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/", s.handleIndex)
 }
 
+// Start 启动后台任务（目前是 Token 自动刷新巡检）。
+// ctx 取消时全部退出。
+func (s *Server) Start(ctx context.Context) {
+	s.startTokenRefresher(ctx)
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
@@ -421,7 +427,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				s.fail(w, http.StatusInternalServerError, "构造上游请求失败: "+err.Error())
 				return
 			}
-			if (head.Stream || kind == provider.KindWorkBuddy || kind == provider.KindTrae) && !needBridge {
+			if (head.Stream || kind == provider.KindWorkBuddy || kind == provider.KindTrae || kind == provider.KindOpenAI) && !needBridge {
 				upreq.Header.Set("Accept", "text/event-stream")
 			}
 			upreq = upreq.WithContext(r.Context())
@@ -447,6 +453,15 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				if fallback.ShouldFallbackModel(resp.StatusCode, bodyText) {
 					modelExhausted = true
 					break
+				}
+				// 429 换号前退避：连发会触发更严的风控
+				if resp.StatusCode == 429 {
+					backoff := time.Duration(600+300*attempt) * time.Millisecond
+					select {
+					case <-time.After(backoff):
+					case <-r.Context().Done():
+						return
+					}
 				}
 				continue
 			}

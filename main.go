@@ -50,6 +50,10 @@ func main() {
 	}
 
 	srv := gateway.New(store)
+	// 后台任务：Token 到期前自动刷新
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	defer bgCancel()
+	srv.Start(bgCtx)
 	httpSrv := &http.Server{
 		Addr:              listen,
 		Handler:           srv,
