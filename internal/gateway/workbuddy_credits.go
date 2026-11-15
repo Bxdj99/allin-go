@@ -93,9 +93,14 @@ func (s *Server) handleWorkBuddyCredits(w http.ResponseWriter, r *http.Request) 
 				row["buckets"] = res.sum.Buckets
 				row["packages"] = res.sum.Packages
 				row["activePackages"] = res.sum.Active
-				if res.sum.ExpireAt != "" {
-					row["expireAt"] = res.sum.ExpireAt
+				if res.sum.ResetAt != "" {
+					row["resetAt"] = res.sum.ResetAt
 				}
+				if res.sum.ExpiringSoon > 0 {
+					row["expiringSoon"] = res.sum.ExpiringSoon
+				}
+				row["lifetimeSize"] = res.sum.LifetimeSize
+				row["exhaustedPackages"] = res.sum.Exhausted
 				if res.sum.Note != "" {
 					row["note"] = res.sum.Note
 				}

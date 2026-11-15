@@ -1410,21 +1410,41 @@ function renderCredits(d) {
     }
     const pct = Number(r.percent) || 0;
     const color = pct > 50 ? '#3fb950' : pct > 20 ? '#d29922' : '#f85149';
-    html += '<div style="padding:8px 0;border-bottom:1px solid #21262d">' +
+    html += '<div style="padding:10px 0;border-bottom:1px solid #21262d">' +
       '<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">' +
         '<span>' + esc(name) + '</span>' +
         '<span style="color:' + color + '"><b>' + fmtCredit(r.remaining) + '</b>' +
         '<span class="dim"> / ' + fmtCredit(r.total) + '</span></span>' +
       '</div>' +
-      '<div style="height:4px;background:#21262d;border-radius:2px;overflow:hidden">' +
+      '<div style="height:5px;background:#21262d;border-radius:3px;overflow:hidden">' +
         '<div style="width:' + Math.min(100, pct) + '%;height:100%;background:' + color + '"></div>' +
       '</div>' +
-      '<div class="dim" style="font-size:11px;margin-top:3px">' +
+      '<div class="dim" style="font-size:11px;margin-top:4px;line-height:1.7">' +
         pct.toFixed(1) + '% 剩余' +
-        (r.activePackages !== undefined ? ' · 有效包 ' + r.activePackages + '/' + r.packages : '') +
-        (r.expireAt ? ' · 最早到期 ' + esc(r.expireAt) : '') +
-        (r.note ? ' · ' + esc(r.note) : '') +
-      '</div></div>';
+        (r.activePackages !== undefined ? ' · 有效包 ' + r.activePackages +
+           (r.exhaustedPackages ? '（已耗尽 ' + r.exhaustedPackages + '）' : '') : '') +
+        (r.resetAt ? ' · 最近重置 ' + esc(r.resetAt) : '') +
+        (r.expiringSoon > 0 ? ' · <span class="warn">7天内到期 ' + fmtCredit(r.expiringSoon) + '</span>' : '') +
+        (r.lifetimeSize ? '<br>历史累计发放 ' + fmtCredit(r.lifetimeSize) + '（含已用完的包）' : '') +
+        (r.note ? '<br>' + esc(r.note) : '') +
+      '</div>'
+    ;
+
+    // 明细：每个还有余额的包
+    const bs = r.buckets || [];
+    if (bs.length) {
+      html += '<details style="margin-top:6px"><summary style="font-size:11px;cursor:pointer;color:#8b949e">' +
+        '查看 ' + bs.length + ' 个有效包明细</summary><div style="margin-top:4px">';
+      bs.slice(0, 20).forEach(b => {
+        html += '<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0;opacity:.85">' +
+          '<span>' + esc(b.name || '额度包') +
+            (b.source ? ' <span class="dim">(' + esc(b.source) + ')</span>' : '') + '</span>' +
+          '<span>' + fmtCredit(b.remaining) + ' / ' + fmtCredit(b.total) + '</span></div>';
+      });
+      if (bs.length > 20) html += '<div class="dim" style="font-size:11px">…还有 ' + (bs.length - 20) + ' 个</div>';
+      html += '</div></details>';
+    }
+    html += '</div>';
   });
   box.innerHTML = html;
   el('creditTotal').textContent = d.totalCap > 0

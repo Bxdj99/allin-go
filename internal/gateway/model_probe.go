@@ -152,10 +152,15 @@ func (s *Server) handleModelProbe(w http.ResponseWriter, r *http.Request) {
 func probeOneModel(ctx context.Context, c workbuddy.Customer, model string) ModelProbe {
 	start := time.Now()
 	mp := ModelProbe{Model: model}
+	// 用足够大的输出预算做真实请求。
+	//
+	// 教训：一开始只发 max_tokens=1，上游对这么小的请求不做完整校验
+	// （尤其推理类模型，1 个 token 连首帧都不产生），于是「检测通过」
+	// 但用户真用的时候被拒。现在给 64，并且要求真读到内容。
 	body := map[string]any{
 		"model":      model,
-		"messages":   []map[string]any{{"role": "user", "content": "hi"}},
-		"max_tokens": 1,
+		"messages":   []map[string]any{{"role": "user", "content": "1+1=?"}},
+		"max_tokens": 64,
 		"stream":     true,
 	}
 	raw, err := c.Chat(ctx, body)
@@ -185,9 +190,52 @@ func probeOneModel(ctx context.Context, c workbuddy.Customer, model string) Mode
 		}
 		return mp
 	}
+	// 光有 200 不够，要确认流里真的产出了内容
+	// （上游可能返回一帧 role 然后静默结束）
+	if !streamHasContent(raw) {
+		mp.Status = "empty"
+		mp.Msg = "上游接受了请求但没有产出内容（可能额度不足或模型不可用）"
+		return mp
+	}
 	mp.OK = true
 	mp.Status = "ok"
 	return mp
+}
+
+// streamHasContent 判断 SSE 流里是否有真实的正文/推理增量。
+func streamHasContent(raw []byte) bool {
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var ch struct {
+			Choices []struct {
+				Delta struct {
+					Content   string `json:"content"`
+					Reasoning string `json:"reasoning_content"`
+					ToolCalls []any  `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+			Code int `json:"code"`
+		}
+		if json.Unmarshal([]byte(payload), &ch) != nil {
+			continue
+		}
+		if ch.Code != 0 {
+			return false // 流里夹了业务错误
+		}
+		for _, c := range ch.Choices {
+			if c.Delta.Content != "" || c.Delta.Reasoning != "" || len(c.Delta.ToolCalls) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func truncateStr(s string, n int) string {
