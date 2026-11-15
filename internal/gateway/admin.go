@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +35,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"accounts":   accounts,
 		"models":     len(provider.ModelList(cfg)),
 		"configPath": s.store.Path(),
+		// listen 是配置文件里的监听地址；面板拿它拼客户端连接信息（不写死 3425）
+		"listen": net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port)),
+		"host":   cfg.Server.Host,
+		"port":   cfg.Server.Port,
 	})
 }
 

@@ -71,6 +71,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/providers/sync", s.withAuth(s.handleProviderSync))
 	s.mux.HandleFunc("/api/providers/catalog", s.withAuth(s.handleProviderCatalog))
 	s.mux.HandleFunc("/api/providers/write", s.withAuth(s.handleProviderWrite))
+	// 模型筛选：保存「对外暴露哪些模型」的勾选结果（见 expose.go）。
+	s.mux.HandleFunc("/api/providers/models/expose", s.withAuth(s.handleProviderExpose))
 	s.mux.HandleFunc("/api/accounts/write", s.withAuth(s.handleAccountWrite))
 	s.mux.HandleFunc("/api/accounts/export", s.withAuth(s.handleAccountsExport))
 	s.mux.HandleFunc("/api/accounts/import", s.withAuth(s.handleAccountsImport))

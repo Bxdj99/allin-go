@@ -55,6 +55,46 @@
   .stat .k { font-size:11px; color:var(--dim); }
   .stat .v { font-size:17px; color:var(--accent); font-variant-numeric:tabular-nums; line-height:1.3; }
 
+  /* ==================== 客户端连接信息（总览页顶部大卡片） ==================== */
+  .ccard {
+    background:linear-gradient(160deg,#132030,#161b22 62%);
+    border:1px solid #1f6feb8c; border-radius:14px; padding:16px 15px; margin-bottom:12px;
+    box-shadow:0 0 0 1px #1f6feb1f, 0 8px 22px #0006;
+  }
+  .ccard h2 { font-size:13px; margin:0 0 4px; color:var(--accent); font-weight:700; letter-spacing:.5px; }
+  .ccard .ccsub { font-size:11px; color:var(--dim); margin-bottom:14px; }
+  .cclabel { font-size:11px; color:var(--dim); margin:0 0 5px; letter-spacing:.5px; }
+  .ccrow { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .ccrow:last-of-type { margin-bottom:10px; }
+  /* 大字号等宽展示：让「地址 / Key」一眼就能看到并抄走 */
+  .ccval {
+    flex:1; min-width:0; background:#0a0e13; border:1px solid var(--line); border-radius:9px;
+    padding:11px 12px; font:600 15px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;
+    color:#e6edf3; word-break:break-all; user-select:all; -webkit-user-select:all;
+  }
+  .ccval.addr { color:#79c0ff; }
+  .ccval.key { color:#d2a8ff; letter-spacing:.5px; }
+  .ccval.empty { color:var(--dim); font-weight:400; }
+  .ccbtn { flex:0 0 auto; }
+  .ccmodel {
+    font:600 13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ok);
+    word-break:break-all; user-select:all; -webkit-user-select:all;
+  }
+
+  /* ==================== 模型筛选（可勾选标签） ==================== */
+  .msx { border-top:1px solid var(--line); padding:10px 12px; background:#0d1117; }
+  .msx .bar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+  .msx .tips { font-size:11px; color:var(--dim); margin-top:7px; line-height:1.55; }
+  .mchk {
+    display:inline-flex; align-items:center; gap:5px; cursor:pointer; margin:2px 5px 2px 0;
+    background:#21262d; border:1px solid var(--line); border-radius:6px; padding:3px 8px;
+    font-size:11px; color:var(--dim); line-height:1.5;
+  }
+  .mchk input { width:auto; margin:0; padding:0; accent-color:#1f6feb; }
+  /* 已勾选：亮色边框 + 勾 + 加粗，和未勾选一眼区分 */
+  .mchk.on { color:#e6edf3; border-color:#1f6feb; background:#1f6feb26; font-weight:600; }
+  .mchk.on::after { content:"✓"; color:var(--ok); font-weight:700; }
+
   /* ==================== 表单控件 ==================== */
   input, select, textarea {
     width:100%; background:var(--inner); border:1px solid var(--line); color:var(--text);
@@ -180,6 +220,32 @@
 
 <!-- ==================== 1. 总览 ==================== -->
 <section class="page active" id="page-overview">
+  <!-- 客户端连接信息：放在总览最顶部，比下面的口令输入框显眼得多。 -->
+  <!-- 地址 / Key / 模型名示例都从这里复制，端口取自 /api/status（不写死 3425）。 -->
+  <div class="ccard">
+    <h2>客户端连接信息</h2>
+    <div class="ccsub">把下面这些填进客户端（Cherry Studio / ChatBox / 自建脚本），就能直接调用本网关</div>
+
+    <div class="cclabel">API 地址</div>
+    <div class="ccrow">
+      <div class="ccval addr" id="ccApiBase">-</div>
+      <button class="btn sm ccbtn" id="btnCopyApiBase">复制</button>
+    </div>
+
+    <div class="cclabel">API Key</div>
+    <div class="ccrow">
+      <div class="ccval key empty" id="ccApiKey">（未设置）</div>
+    </div>
+    <div class="btnrow" style="margin:0 0 14px">
+      <button class="btn sm" id="btnToggleApiKey">显示</button>
+      <button class="btn sm" id="btnCopyApiKey">复制</button>
+    </div>
+
+    <div class="cclabel">模型名示例</div>
+    <div class="ccmodel" id="ccModelSample">-</div>
+  </div>
+
+
   <div class="card">
     <h2>网关口令</h2>
     <div class="field" style="margin-bottom:0">
@@ -527,6 +593,7 @@
    ===================================================================== */
 const S = {
   key: '', providers: [], kinds: [], status: null, config: null,
+  models: [],
   tab: 'overview', editing: null, expanded: new Set(),
   poll: { gen: 0, timer: 0, startedAt: 0, deadlineAt: 0 },
 };
@@ -671,6 +738,9 @@ function setKey(k, reload) {
   persistKey(S.key);
   el('keyTop').value = S.key;
   el('keyState').textContent = S.key ? '已保存（' + S.key.slice(0, 4) + '…）' : '未设置';
+  // 顶部「客户端连接信息」里的 Key 跟着变（本轮新口令默认仍打码显示）
+  ccKeyShown = false;
+  renderClientCard();
   if (reload) reloadTab();
 }
 
@@ -695,6 +765,9 @@ function setKey(k, reload) {
     history.replaceState(null, '', location.pathname + location.search);
   }
 })();
+
+// 首屏先把连接信息卡片画出来（此时 /api/status 还没回来，端口先缺省用当前 origin）
+renderClientCard();
 
 on('btnKeyTop', 'click', () => {
   setKey(el('keyTop').value, true);
@@ -742,6 +815,8 @@ function setHealth(ok, text) {
 
 async function loadOverview() {
   el('endpoint').textContent = location.host + '/v1';
+  // 连接信息卡片先按本地已知信息画一遍（端口可能要等 /api/status 回来才准）
+  renderClientCard();
   // 运行状态
   try {
     const s = await api('/api/status');
@@ -753,20 +828,24 @@ async function loadOverview() {
     setHealth(false, '异常');
     el('modelCount').textContent = '';
     el('models').innerHTML = '<span class="dim">口令缺失或服务不可用时无法读取模型</span>';
+    renderClientCard();
     return;
   }
-  // 模型列表
+  // 模型列表（同时给连接信息卡取一个模型名示例）
   try {
     const m = await api('/api/models');
     const list = (m && m.data) || [];
+    S.models = list.map((x) => x.id);
     el('modelCount').textContent = '(' + list.length + ')';
     el('models').innerHTML = list.length
       ? '<div>' + list.map((x) => '<span class="tag on">' + esc(x.id) + '</span>').join('') + '</div>'
       : '<span class="dim">还没有可用模型，先去「供应商」加一个并填好 key</span>';
   } catch (e) {
+    S.models = [];
     el('modelCount').textContent = '';
     el('models').innerHTML = '<span class="err">读取模型失败：' + esc(e.message) + '</span>';
   }
+  renderClientCard();
 }
 
 function renderStatus(s) {
@@ -877,6 +956,89 @@ async function loadHealth() {
     box.innerHTML = '<b>✓ ' + esc(text) + '</b>' + detail;
   } catch (e) { box.style.display = 'none'; }
 }
+
+/* ---------- 客户端连接信息（总览页顶部大卡片） ---------- */
+
+// Key 是否明文显示（只在本次页面会话内有效，刷新回到打码）
+let ccKeyShown = false;
+
+// 打码：前 6 位 + ***；太短的整串打码，避免「打了码等于没打」
+function ccMask(s) {
+  if (!s) return '';
+  if (s.length <= 6) return '***';
+  return s.slice(0, 6) + '***';
+}
+
+// API 地址：端口取自 /api/status（配置里的 server.port），不写死 3425。
+// host 为 0.0.0.0 / :: 时换成本页面访问用的主机名，否则手机外面连不上。
+function ccApiBase() {
+  const st = S.status || {};
+  const port = Number(st.port) || 0;
+  if (!port) return location.origin + '/v1';
+  let host = String(st.host || '');
+  if (!host || host === '0.0.0.0' || host === '::' || host === '[::]') {
+    host = location.hostname || '127.0.0.1';
+  } else if (host.indexOf(':') >= 0 && host.charAt(0) !== '[') {
+    host = '[' + host + ']';            // IPv6 字面量必须带方括号
+  }
+  return 'http://' + host + ':' + port + '/v1';
+}
+
+// 渲染整块（加载总览、口令变更、模型列表刷新时都调一次）
+function renderClientCard() {
+  const baseBox = el('ccApiBase');
+  if (baseBox) baseBox.textContent = ccApiBase();
+
+  const key = S.key || '';
+  const keyBox = el('ccApiKey');
+  if (keyBox) {
+    keyBox.textContent = key ? (ccKeyShown ? key : ccMask(key)) : '（还没填口令，见下方「网关口令」）';
+    keyBox.classList.toggle('empty', !key);
+  }
+  const tg = el('btnToggleApiKey');
+  if (tg) { tg.textContent = ccKeyShown ? '隐藏' : '显示'; tg.disabled = !key; }
+
+  const sample = el('ccModelSample');
+  if (sample) sample.textContent = (S.models && S.models[0]) || '（暂无可用模型）';
+}
+
+// 复制到剪贴板：navigator.clipboard 在 http 页面 / 老旧 WebView 里不可用，
+// 退回 execCommand('copy') 兜底，两套都失败才报错。
+async function copyText(text, okMsg) {
+  if (!text) { toast('没有可复制的内容', 'warn'); return; }
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      toast(okMsg, 'ok');
+      return;
+    }
+  } catch (e) { /* 落到下面的兜底方案 */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand('copy');
+    ta.remove();
+    if (ok) { toast(okMsg, 'ok'); return; }
+  } catch (e) { /* 落到下面的错误提示 */ }
+  toast('复制失败，请长按上面的内容手动复制', 'err');
+}
+
+on('btnCopyApiBase', 'click', () => copyText(ccApiBase(), 'API 地址已复制'));
+on('btnToggleApiKey', 'click', () => {
+  ccKeyShown = !ccKeyShown;
+  renderClientCard();
+});
+on('btnCopyApiKey', 'click', () => {
+  if (!S.key) { toast('还没填要复制的口令', 'warn'); return; }
+  copyText(S.key, 'API Key 已复制');
+});
 
 // ---------- 模型目录同步 ----------
 async function syncModels() {
@@ -1351,9 +1513,7 @@ function renderProviderList() {
         '</div>' +
         '<div class="pmeta"><span class="tag">' + esc(p.kind || 'openai') + '</span> id: ' + esc(p.id) + '</div>' +
         '<div class="pmeta">' + esc(p.baseUrl || '（用该 kind 的默认 baseUrl）') + '</div>' +
-        '<div style="margin-top:5px">' + (models.length
-          ? models.map((m) => '<span class="tag on">' + esc(m) + '</span>').join('')
-          : '<span class="dim" style="font-size:11px">未配置模型</span>') + '</div>' +
+        '<div style="margin-top:5px" id="mtags-' + esc(p.id) + '">' + modelTagsHtml(p, models) + '</div>' +
         '<div class="pacts">' +
           '<button class="btn sm" data-act="prov-expand" data-pid="' + esc(p.id) + '">' +
             (expanded ? '收起账号' : '账号 (' + accounts.length + ')') + '</button>' +
@@ -1361,9 +1521,85 @@ function renderProviderList() {
           '<button class="btn sm danger" data-act="prov-del" data-pid="' + esc(p.id) + '">删除</button>' +
         '</div>' +
       '</div>' +
-      (expanded ? '<div class="accs">' + accHtml + '</div>' : '') +
+      (expanded ? modelFilterHtml(p, models) + '<div class="accs">' + accHtml + '</div>' : '') +
       '</div>';
   }).join('');
+}
+
+/* ---------- 模型筛选：勾选要暴露给客户端的模型 ---------- */
+
+// 当前生效的暴露列表（后端 /api/providers 的 exposed 字段已按 models 过滤过）
+function exposedOf(p) {
+  return Array.isArray(p.exposed) ? p.exposed.slice() : (p.models || []).slice();
+}
+
+// 卡片上那条模型标签行：勾中的亮色 + ✓，勾掉的灰条划线
+function modelTagsHtml(p, models) {
+  if (!models.length) return '<span class="dim" style="font-size:11px">未配置模型</span>';
+  const ex = exposedOf(p);
+  return models.map((m) => (ex.indexOf(m) >= 0
+    ? '<span class="tag on">' + esc(m) + '</span>'
+    : '<span class="tag" style="text-decoration:line-through;opacity:.65">' + esc(m) + '</span>')).join('');
+}
+
+// 展开后的筛选面板：复选框 + 全选/全不选 + 保存筛选
+function modelFilterHtml(p, models) {
+  if (!models.length) {
+    return '<div class="msx"><div class="dim" style="font-size:12px">还没同步到模型，' +
+      '先点「同步模型目录」，之后就能在这里勾选要暴露给客户端的模型。</div></div>';
+  }
+  const ex = exposedOf(p);
+  const boxes = models.map((m) => {
+    const on = ex.indexOf(m) >= 0;
+    return '<label class="mchk' + (on ? ' on' : '') + '">' +
+      '<input type="checkbox" data-act="model-chk" data-pid="' + esc(p.id) + '" data-model="' + esc(m) + '"' +
+      (on ? ' checked' : '') + '>' + esc(m) + '</label>';
+  }).join('');
+  return '<div class="msx" data-msx="' + esc(p.id) + '">' +
+    '<div class="bar">' +
+      '<span class="dim" style="font-size:11px;margin-right:auto">暴露给客户端：' +
+        ex.length + ' / ' + models.length + '</span>' +
+      '<button class="btn sm" data-act="model-all" data-pid="' + esc(p.id) + '">全选</button>' +
+      '<button class="btn sm" data-act="model-none" data-pid="' + esc(p.id) + '">全不选</button>' +
+      '<button class="btn sm primary" data-act="model-save" data-pid="' + esc(p.id) + '">保存筛选</button>' +
+    '</div>' +
+    '<div>' + boxes + '</div>' +
+    '<div class="tips">只有勾中的模型会出现在 <code>/v1/models</code>，没勾中的模型名调用会被拒绝。' +
+      '保存结果写进配置的 <code>exposedModels</code>，不影响已同步的模型目录。</div>' +
+  '</div>';
+}
+
+// 收集某供应商当前勾中的模型
+function pickedModels(pid) {
+  const box = document.querySelector('[data-msx="' + pid + '"]');
+  if (!box) return null;
+  return Array.from(box.querySelectorAll('input[data-act="model-chk"]:checked'))
+    .map((x) => x.dataset.model);
+}
+
+// 勾选状态变化时同步视觉标记（不重新渲染整张卡，避免滚动位置跳动）
+function syncModelChecks(box) {
+  if (!box) return;
+  const all = Array.from(box.querySelectorAll('input[data-act="model-chk"]'));
+  const on = all.filter((x) => x.checked).length;
+  all.forEach((x) => { if (x.parentElement) x.parentElement.classList.toggle('on', x.checked); });
+  const counter = box.querySelector('.bar .dim');
+  if (counter) counter.textContent = '暴露给客户端：' + on + ' / ' + all.length;
+}
+
+// 保存筛选：POST /api/providers/models/expose
+async function saveExposedModels(pid) {
+  const picked = pickedModels(pid);
+  if (picked === null) { toast('请先展开该供应商的账号面板', 'err'); return; }
+  try {
+    const r = await api('/api/providers/models/expose', { method: 'POST', body: { providerId: pid, models: picked } });
+    toast('已保存模型筛选：' + (r.exposedCount || 0) + ' 个模型对外暴露', 'ok');
+    await loadProviders();
+    // 总览的模型数与可用模型列表跟着变
+    loadOverview();
+  } catch (e) {
+    toast('保存筛选失败：' + e.message, 'err');
+  }
 }
 
 // 全局账号视图（按供应商分组）
@@ -1408,6 +1644,11 @@ function renderAccountGroups() {
 /* ---------- 供应商卡片上的事件（事件委托） ---------- */
 on('providerList', 'change', (e) => {
   const t = e.target;
+  // 模型复选框：只更新视觉标记，真正落盘要点「保存筛选」
+  if (t.dataset.act === 'model-chk') {
+    syncModelChecks(t.closest('[data-msx]'));
+    return;
+  }
   if (t.dataset.act !== 'prov-toggle') return;
   toggleProvider(t.dataset.pid, t.checked);
 });
@@ -1416,6 +1657,19 @@ on('providerList', 'click', (e) => {
   if (!b) return;
   const id = b.dataset.pid;
   const act = b.dataset.act;
+  if (act === 'model-all' || act === 'model-none') {
+    // 全选 / 全不选：只改 DOM 勾选状态，仍需点「保存筛选」
+    const box = b.closest('[data-msx]');
+    if (box) {
+      box.querySelectorAll('input[data-act="model-chk"]').forEach((x) => { x.checked = (act === 'model-all'); });
+      syncModelChecks(box);
+    }
+    return;
+  }
+  if (act === 'model-save') {
+    saveExposedModels(id);
+    return;
+  }
   if (act === 'prov-expand') {
     if (S.expanded.has(id)) S.expanded.delete(id); else S.expanded.add(id);
     renderProviderList();

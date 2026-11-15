@@ -387,6 +387,12 @@ func (s *Server) handleUsageSummary(w http.ResponseWriter, r *http.Request) {
 // handleProviders 列出全部供应商（凭据脱敏）。
 //
 //	GET /api/providers
+//
+// models / exposed / exposedModels 三个字段的分工：
+//
+//	models       同步到的全部模型（配置里的 models 原样）
+//	exposedModels 面板勾选结果原样；为空 = 「不限制，全部暴露」（老配置）
+//	exposed      实际对外生效的列表（已按 models 过滤过），面板块勾选状态以它为准
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	cfg := s.store.Snapshot()
 	out := make([]map[string]any, 0, len(cfg.Providers))
@@ -425,6 +431,8 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 			"baseUrl":        p.BaseURL,
 			"enabled":        p.IsEnabled(),
 			"models":         p.Models,
+			"exposedModels":  p.ExposedModels,
+			"exposed":        p.Exposed(),
 			"autoSyncModels": p.AutoSyncModels,
 			"accounts":       accts,
 			"notes":          p.Notes,

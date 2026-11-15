@@ -210,6 +210,11 @@ func Resolve(cfg *config.Config, model string) (*config.Provider, *config.Accoun
 		if a == nil {
 			return nil, nil, "", fmt.Errorf("供应商 %s 没有可用账号", pid)
 		}
+		// 显式指定 provider/model 时也尊重面板勾选：没勾中的模型当作不存在，
+		// 否则「只暴露几个模型」形同虚设——客户端硬写模型名照样能用。
+		if !p.IsModelExposed(name) {
+			return nil, nil, "", fmt.Errorf("模型未暴露给客户端: %s/%s（可在面板「供应商 → 模型筛选」里勾选）", pid, name)
+		}
 		return p, a, name, nil
 	}
 
@@ -220,7 +225,7 @@ func Resolve(cfg *config.Config, model string) (*config.Provider, *config.Accoun
 		if p == nil || !p.IsEnabled() {
 			continue
 		}
-		for _, m := range p.Models {
+		for _, m := range p.Exposed() {
 			if m == model {
 				if a := pickAccount(p); a != nil {
 					return p, a, model, nil
@@ -246,13 +251,16 @@ func pickAccount(p *config.Provider) *config.Account {
 }
 
 // ModelList 列出所有可用模型（provider/model 形式）。
+//
+// 走 Provider.Exposed()：面板勾选了 exposedModels 的供应商只列出勾中的那些，
+// 未勾选（exposedModels 为空）的仍然全列，老配置行为不变。
 func ModelList(cfg *config.Config) []string {
 	out := make([]string, 0, 64)
 	for _, p := range cfg.Providers {
 		if p == nil || !p.IsEnabled() {
 			continue
 		}
-		for _, m := range p.Models {
+		for _, m := range p.Exposed() {
 			out = append(out, p.ID+"/"+m)
 		}
 	}

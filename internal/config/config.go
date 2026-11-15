@@ -16,8 +16,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -92,6 +94,10 @@ type Provider struct {
 	APIKey   string     `json:"apiKey,omitempty"`
 	Accounts []*Account `json:"accounts,omitempty"`
 	Models   []string   `json:"models,omitempty"`
+	// ExposedModels 是「对外暴露」的模型子集（面板勾选结果）。
+	// 为空表示全部暴露（兼容老配置）；非空时只暴露这些，且必须同时出现在 Models 里。
+	// 它只影响 /v1/models 与裸模型名解析，不影响 Models 本身（目录同步照常追加）。
+	ExposedModels []string `json:"exposedModels,omitempty"`
 	// AutoSyncModels 为真时，网关启动后在后台同步一次模型目录（只追加不覆盖，
 	// 口径同 POST /api/providers/sync）。默认 false：目录同步要打上游，不该默认消耗。
 	AutoSyncModels bool `json:"autoSyncModels,omitempty"`
@@ -104,6 +110,43 @@ type Provider struct {
 // IsEnabled 默认启用。
 func (p *Provider) IsEnabled() bool {
 	return p == nil || p.Enabled == nil || *p.Enabled
+}
+
+// Exposed 返回真正对外暴露的模型（始终按 provider.Models 的顺序）。
+//
+// ExposedModels 为空 = 全部暴露（老配置兼容）；非空时只返回其中的，
+// 且必须同时存在于 Models —— 面板勾选过的模型被目录同步漏掉/手动删掉时，不留幽灵条目。
+func (p *Provider) Exposed() []string {
+	if p == nil {
+		return nil
+	}
+	if len(p.ExposedModels) == 0 {
+		return p.Models
+	}
+	want := make(map[string]bool, len(p.ExposedModels))
+	for _, m := range p.ExposedModels {
+		want[m] = true
+	}
+	out := make([]string, 0, len(p.ExposedModels))
+	for _, m := range p.Models {
+		if want[m] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// IsModelExposed 判断某个模型名是否对外暴露（口径同 Exposed）。
+func (p *Provider) IsModelExposed(model string) bool {
+	if p == nil {
+		return false
+	}
+	for _, m := range p.Exposed() {
+		if m == model {
+			return true
+		}
+	}
+	return false
 }
 
 // Group 是路由组：按顺序挑目标。
@@ -226,7 +269,9 @@ func (s *Store) load() error {
 		}
 	}
 	if cfg.Server.Port == 0 {
-		cfg.Server.Port = 3425
+		// 首次安装：从 3425 往上找一个没人占的端口。
+		// 很多人同时装了 Magpie（也是 3425），固定端口必然冲突。
+		cfg.Server.Port = pickFreePort(3425)
 	}
 	if cfg.Server.Host == "" {
 		// 默认只监听回环：这个服务能代理到付费账号，绝不该默认暴露到局域网
@@ -244,6 +289,19 @@ func (s *Store) load() error {
 		}
 	}
 	return nil
+}
+
+// pickFreePort 从 prefer 开始往上找空闲端口，最多试 50 个。
+// 找不到就返回 prefer（宁可冲突也让用户看到明确报错，而不是悄悄换个奇怪端口）。
+func pickFreePort(prefer int) int {
+	for port := prefer; port < prefer+50 && port < 65536; port++ {
+		ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+		if err == nil {
+			ln.Close()
+			return port
+		}
+	}
+	return prefer
 }
 
 // generateKey 生成 mp- 前缀的 32 字节随机口令。
