@@ -162,6 +162,11 @@
 </style>
 </head>
 <body>
+  <!-- 未填口令时的全局提示：任何请求 401 都会让它亮起来 -->
+  <div id="noKeyBanner" style="display:none;position:sticky;top:0;z-index:999;background:#f85149;color:#fff;padding:10px 14px;font-size:13px;line-height:1.6">
+    <b>还没填网关口令</b> —— 点模块的「运行」键可以看到，拿到后粘到下面的输入框并保存。
+  </div>
+
 
 <header class="hdr">
   <div style="min-width:0">
@@ -605,18 +610,32 @@ async function api(path, opts) {
   if (text) {
     try { data = JSON.parse(text); } catch (e) { data = { raw: text }; }
   }
+  if (res.ok) { const _b = el('noKeyBanner'); if (_b) _b.style.display = 'none'; }
   if (!res.ok) {
-    if (res.status === 401) throw new Error('未填口令或口令不对（HTTP 401）\n\n怎么拿口令：\n1. 模块管理器里点本模块的「运行」键，终端会打印「网关口令」\n2. 或用文件管理器看 /data/adb/modules/allin/data/config.json 里的 authKey\n3. 拿到后粘到上面输入框，点「保存并刷新」');
+    if (res.status === 401) { const _b = el('noKeyBanner'); if (_b) _b.style.display = 'block'; }
+    if (res.status === 401) throw new Error((S.key ? '口令不对' : '当前没填口令') + '（HTTP 401）\n\n怎么拿口令：\n1. 模块管理器里点本模块的「运行」键，终端会打印「网关口令」\n2. 或用文件管理器看 /data/adb/modules/allin/data/config.json 里的 authKey\n3. 拿到后粘到上面输入框，点「保存并刷新」');
     throw new Error(pickErr(data, res.status));
   }
   return data;
 }
 
 /* ===================== 口令管理 ===================== */
+// 存口令：localStorage 优先，失败退 sessionStorage，都失败则明确告诉用户
+function persistKey(k) {
+  let ok = false;
+  try { localStorage.setItem('allin_key', k); ok = true; } catch (e) { /* 隐私模式 */ }
+  try { sessionStorage.setItem('allin_key', k); ok = true; } catch (e) { /* 忽略 */ }
+  if (!ok && k) {
+    // 两个存储都不可用：至少让用户知道「这次能用，刷新就没了」
+    toast('浏览器不允许保存口令，刷新后需要重新填写', 'warn');
+  }
+  return ok;
+}
+
 // 同时更新输入框与本地存储；retry 为真时重新加载当前页
 function setKey(k, reload) {
   S.key = (k || '').trim();
-  try { localStorage.setItem('allin_key', S.key); } catch (e) { /* 隐私模式下忽略 */ }
+  persistKey(S.key);
   el('keyTop').value = S.key;
   el('keyState').textContent = S.key ? '已保存（' + S.key.slice(0, 4) + '…）' : '未设置';
   if (reload) reloadTab();
@@ -627,8 +646,12 @@ function setKey(k, reload) {
   let fromHash = '';
   const m = location.hash.match(/key=([^&]+)/);
   if (m) fromHash = decodeURIComponent(m[1]);
+  // 依次尝试 localStorage → sessionStorage（有些 WebView/隐私模式会禁用前者）
   let saved = '';
   try { saved = localStorage.getItem('allin_key') || ''; } catch (e) { /* 忽略 */ }
+  if (!saved) {
+    try { saved = sessionStorage.getItem('allin_key') || ''; } catch (e) { /* 忽略 */ }
+  }
   const k = fromHash || saved;
   S.key = k.trim();
   el('keyTop').value = S.key;
