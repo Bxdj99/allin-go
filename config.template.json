@@ -2,7 +2,7 @@
   "_说明": "All In Go 版配置。providers 里每条填上自己的 key 就能用；kind=openai 走标准兼容协议，kind=anthropic 走 Messages 协议，kind=workbuddy 是腾讯 WorkBuddy。models 是暴露给客户端用的模型名（写成 provider/model 调用）。",
   "server": {
     "host": "127.0.0.1",
-    "port": 6667,
+    "port": 6868,
     "authKey": ""
   },
   "providers": [

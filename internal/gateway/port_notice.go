@@ -16,7 +16,7 @@ import (
 // 让他自己决定是保持不动还是切过去。不自动改 —— 因为切端口会让已配好的客户端失联。
 
 // DefaultPort 是当前版本的默认端口。
-const DefaultPort = 6667
+const DefaultPort = 6868
 
 // LegacyPort 是历史默认端口。
 const LegacyPort = 3425
@@ -29,6 +29,8 @@ type PortNotice struct {
 	Current int `json:"current"`
 	// Suggested 建议端口
 	Suggested int `json:"suggested"`
+	// Severity: error（浏览器打不开，必须换）/ warn（建议换）
+	Severity string `json:"severity,omitempty"`
 	// Reason 为什么建议
 	Reason string `json:"reason,omitempty"`
 	// Endpoint 当前端口对应的客户端地址
@@ -39,21 +41,32 @@ type PortNotice struct {
 
 // buildPortNotice 判断要不要提示端口。
 //
-// 只在「当前是旧默认端口 3425」时提示 —— 用户自己改成别的端口（比如 8080）说明
-// 他有明确意图，不该打扰。
+// 两种情况值得提示：
+//  1. 当前端口在浏览器受限列表里（最严重：网关好着，但浏览器打不开）
+//  2. 当前是历史默认值 3425（新版默认变了，但客户端可能还配着老的）
 func buildPortNotice(cfg *config.Config) PortNotice {
 	cur := cfg.Server.Port
 	n := PortNotice{Current: cur, Suggested: DefaultPort}
 	n.Endpoint = endpointFromHost(cfg.Server.Host, cur)
 	n.SuggestedEndpoint = endpointFromHost(cfg.Server.Host, DefaultPort)
 
-	if cur != LegacyPort {
-		return n // 不是旧默认值，不打扰
+	if config.IsBrowserBlockedPort(cur) {
+		n.Show = true
+		n.Severity = "error"
+		n.Reason = "当前端口 " + itoaPort(cur) + " 在 Chromium 的受限端口列表里" +
+			"（6665-6669 属于 IRC 段），浏览器访问会直接报 ERROR_PORT_BLOCKED。" +
+			"网关本身是正常的，点下面的按钮换到 " + itoaPort(DefaultPort) + " 就能打开面板。"
+		return n
 	}
-	n.Show = true
-	n.Reason = "新版默认端口已改为 6667（避开 Magpie 等同类网关占用的 3425），" +
-		"你当前仍在用 3425。如果客户端已经配的是 3425，可以保持不动；" +
-		"想跟新版默认值一致就切过去，切完记得改客户端地址。"
+	if cur == LegacyPort {
+		n.Show = true
+		n.Severity = "warn"
+		n.Reason = "新版默认端口已改为 " + itoaPort(DefaultPort) +
+			"（避开 Magpie 等同类网关占用的 " + itoaPort(LegacyPort) + "），" +
+			"你当前仍在用 " + itoaPort(LegacyPort) + "。如果客户端已经配的是旧端口，可以保持不动；" +
+			"想跟新版默认值一致就切过去，切完记得改客户端地址。"
+		return n
+	}
 	return n
 }
 

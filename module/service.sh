@@ -37,7 +37,7 @@ RUNLOG="$RUNDIR/gateway.log"
 # 端口从配置读（首次安装会自动选一个空闲端口，避开 Magpie 等占用的 3425）
 PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' /data/local/tmp/allin-run/data/config.json 2>/dev/null | head -1)
 [ -z "$PORT" ] && PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$MODDIR/data/config.json" 2>/dev/null | head -1)
-[ -z "$PORT" ] && PORT=6667
+[ -z "$PORT" ] && PORT=6868
 # 任务中心接口：POST 跑全套（活跃上报→签到→连登兑换→领礼包→领补偿→补签→
 # 猫猫旅行→抽奖）；只读汇总在 $API_STATUS，出问题时先打它看现场。
 API="http://127.0.0.1:$PORT/api/workbuddy/tasks"
@@ -54,6 +54,14 @@ port_up() {
 
 prepare() {
     mkdir -p "$RUNDIR" "$RUNDATA" 2>/dev/null
+    # 自检：模块里的脚本与二进制版本是否对得上。
+    # 之前踩过：改了 action.sh 的端口读取逻辑但忘了复制到模块目录，
+    # 结果「运行」键一直去连旧端口。
+    VER_FROM_BIN=$(strings "$MODDIR/bin/allin" 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+-go' | head -1)
+    VER_FROM_PROP=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null | tr -d ' ')
+    if [ -n "$VER_FROM_BIN" ] && [ -n "$VER_FROM_PROP" ] && [ "$VER_FROM_BIN" != "$VER_FROM_PROP" ]; then
+        log "警告：二进制版本($VER_FROM_BIN) 与 module.prop($VER_FROM_PROP) 不一致，可能是升级没刷全"
+    fi
     if [ ! -f "$MODDIR/bin/allin" ]; then
         log "缺少二进制：$MODDIR/bin/allin"
         return 1

@@ -3,7 +3,7 @@
 // 配置结构与 All In（Java 版）的 config.json 保持兼容，这样原来的配置可以直接搬过来：
 //
 //	{
-//	  "server":    {"host":"127.0.0.1","port":6667,"authKey":"mp-..."},
+//	  "server":    {"host":"127.0.0.1","port":6868,"authKey":"mp-..."},
 //	  "providers": [{...}],
 //	  "routing":   {"groupsEnabled":false,"bareModelFallback":false},
 //	  "usage":     {...}
@@ -269,9 +269,13 @@ func (s *Store) load() error {
 		}
 	}
 	if cfg.Server.Port == 0 {
-		// 首次安装：从 6667 往上找一个没人占的端口。
-		// Magpie 等同类网关默认 3425，避开它减少冲突。
-		cfg.Server.Port = pickFreePort(6667)
+		// 首次安装：从 6868 往上找一个没人占的端口。
+		//
+		// 为什么不是 3425：Magpie 等同类网关默认占用它，装一起必冲突。
+		// 为什么不是 6667：Chromium 内核有一份「受限端口」列表，6665-6669（IRC 段）
+		// 在里面，浏览器访问会直接报 ERROR_PORT_BLOCKED —— 网关自己正常，
+		// 但用户点「运行」跳浏览器就是一片错误页。6868 不在任何受限列表里。
+		cfg.Server.Port = pickFreePort(6868)
 	}
 	if cfg.Server.Host == "" {
 		// 默认只监听回环：这个服务能代理到付费账号，绝不该默认暴露到局域网
@@ -293,8 +297,37 @@ func (s *Store) load() error {
 
 // pickFreePort 从 prefer 开始往上找空闲端口，最多试 50 个。
 // 找不到就返回 prefer（宁可冲突也让用户看到明确报错，而不是悄悄换个奇怪端口）。
+// browserBlockedPorts 是 Chromium 内核拒绝访问的端口。
+// 网关自己监听这些端口完全正常，但用户点「运行」用浏览器打开时会直接
+// 报 ERROR_PORT_BLOCKED —— 表现就是「拉起来了但面板打不开」。
+// 完整列表见 Chromium net/base/port_util.cc。
+var browserBlockedPorts = map[int]bool{
+	1: true, 7: true, 9: true, 11: true, 13: true, 15: true, 17: true, 19: true,
+	20: true, 21: true, 22: true, 23: true, 25: true, 37: true, 42: true, 43: true,
+	53: true, 69: true, 77: true, 79: true, 87: true, 95: true, 101: true, 102: true,
+	103: true, 104: true, 109: true, 110: true, 111: true, 113: true, 115: true,
+	117: true, 119: true, 123: true, 135: true, 137: true, 139: true, 143: true,
+	161: true, 179: true, 389: true, 427: true, 465: true, 512: true, 513: true,
+	514: true, 515: true, 526: true, 530: true, 531: true, 532: true, 540: true,
+	548: true, 554: true, 556: true, 563: true, 587: true, 601: true, 636: true,
+	989: true, 990: true, 993: true, 995: true, 1719: true, 1720: true, 1723: true,
+	2049: true, 3659: true, 4045: true, 5060: true, 5061: true, 6000: true,
+	6566: true, 6665: true, 6666: true, 6667: true, 6668: true, 6669: true,
+	6679: true, 6697: true, 10080: true,
+}
+
+// IsBrowserBlockedPort 判断端口是否会被浏览器拒绝。
+func IsBrowserBlockedPort(p int) bool { return browserBlockedPorts[p] }
+
+// pickFreePort 从 prefer 开始找一个「既没被占用、浏览器也不拦」的端口。
+//
+// 找的时候向上扫 200 个，足够避开常见的连续占用段（比如同时装了两三个网关）。
+// 每个候选都真去 bind 一次，确保不是「看起来空闲但被别的进程独占」。
 func pickFreePort(prefer int) int {
-	for port := prefer; port < prefer+50 && port < 65536; port++ {
+	for port := prefer; port < prefer+200 && port < 65536; port++ {
+		if browserBlockedPorts[port] {
+			continue // 浏览器受限端口，用户打不开面板
+		}
 		ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
 		if err == nil {
 			ln.Close()

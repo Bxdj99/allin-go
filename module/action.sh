@@ -9,7 +9,7 @@ MODDIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 # 端口从配置读（首次安装会自动选一个空闲端口，避开 Magpie 等占用的 3425）
 PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' /data/local/tmp/allin-run/data/config.json 2>/dev/null | head -1)
 [ -z "$PORT" ] && PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$MODDIR/data/config.json" 2>/dev/null | head -1)
-[ -z "$PORT" ] && PORT=6667
+[ -z "$PORT" ] && PORT=6868
 
 port_up() {
     ss -tln 2>/dev/null | grep -q ":$PORT" && return 0
@@ -85,6 +85,19 @@ echo "    Base URL : http://127.0.0.1:$PORT/v1"
 echo "    API Key  : 上面那串口令"
 echo "    模型名   : workbuddy/glm-5.3"
 echo "================================================"
+
+# 浏览器受限端口检查：Chromium 内核（含多数国产浏览器）会拒绝访问
+# IRC 段 6665-6669 等端口，表现是 ERROR_PORT_BLOCKED。
+case "$PORT" in
+    666|667|1008|2049|3659|4045|6000|6566|6665|6666|6667|6668|6669|6679|6697)
+        echo "⚠️  当前端口 $PORT 会被浏览器拦截（Chromium 受限端口），面板打不开。"
+        echo "    请到面板「设置」里换个端口（推荐 6868），或直接改配置文件："
+        echo "    $CFG 里的 server.port"
+        echo
+        echo "    网关本身正常运行，只是浏览器不让连这个端口。"
+        echo
+        ;;
+esac
 
 # 带上口令直接打开面板（避免用户再手输一次）
 if [ -n "$KEY" ]; then

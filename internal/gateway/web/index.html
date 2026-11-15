@@ -361,8 +361,8 @@
   <div id="portNotice" style="display:none;margin-bottom:12px;padding:12px 14px;border-radius:10px;font-size:13px;background:rgba(210,153,34,.12);border:1px solid #d29922;color:#d29922">
     <div id="portNoticeText" style="line-height:1.6"></div>
     <div class="btnrow" style="margin-top:8px">
-      <button class="btn sm primary" id="btnPortSwitch">切换到 <span id="portSuggest">6667</span></button>
-      <button class="btn sm" id="btnPortKeep">保持当前端口</button>
+      <button class="btn sm primary" id="btnPortSwitch">换到 <span id="portSuggest">6868</span></button>
+      <button class="btn sm" id="btnPortKeep">暂不处理</button>
     </div>
   </div>
 <div class="card">
@@ -575,7 +575,7 @@
     </div>
     <div class="field" style="margin-bottom:0">
       <label>port</label>
-      <input id="fPort" inputmode="numeric" placeholder="6667" autocomplete="off">
+      <input id="fPort" inputmode="numeric" placeholder="6868" autocomplete="off">
     </div>
     <div class="btnrow">
       <button class="btn primary" id="btnSaveListen">保存监听设置</button>
@@ -1100,8 +1100,12 @@ async function loadPortNotice() {
     const d = await api('/api/port/notice');
     if (!d.show) { box.style.display = 'none'; return; }
     el('portSuggest').textContent = d.suggested;
+    const isErr = d.severity === 'error';
+    box.style.background = isErr ? 'rgba(248,81,73,.12)' : 'rgba(210,153,34,.12)';
+    box.style.borderColor = isErr ? '#f85149' : '#d29922';
+    box.style.color = isErr ? '#f85149' : '#d29922';
     el('portNoticeText').innerHTML =
-      '<b>⚠️ 端口提示</b><br>' + esc(d.reason) +
+      '<b>' + (isErr ? '❌ 端口被浏览器拦截' : '⚠️ 端口提示') + '</b><br>' + esc(d.reason) +
       '<div style="margin-top:6px;font-size:12px">' +
       '当前地址：<code>' + esc(d.endpoint) + '</code><br>' +
       '切过去后要用：<code>' + esc(d.suggestedEndpoint) + '</code></div>';
@@ -2713,7 +2717,7 @@ async function loadSettings() {
     const cfg = await api('/api/config');
     S.config = cfg;
     const srv = cfg.server || {};
-    el('cfgListen').textContent = (srv.host || '127.0.0.1') + ':' + (srv.port || 6667);
+    el('cfgListen').textContent = (srv.host || '127.0.0.1') + ':' + (srv.port || 6868);
     el('cfgKeyOrigin').textContent = srv.authKeyOrigin === 'first-run-random'
       ? '首次启动自动生成（配置文件里能看到明文）' : (srv.authKey ? '配置文件里已设置' : '未设置（任何请求都不校验）');
     el('fHost').value = srv.host || '';

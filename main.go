@@ -4,7 +4,7 @@
 // 用法：
 //
 //	allin -config /data/adb/modules/allin/data/config.json
-//	allin -addr 127.0.0.1:6667
+//	allin -addr 127.0.0.1:6868
 package main
 
 import (
@@ -31,7 +31,7 @@ func main() {
 
 	defCfg := defaultConfigPath()
 	cfgPath := flag.String("config", defCfg, "配置文件路径")
-	addr := flag.String("addr", "", "覆盖监听地址，例如 127.0.0.1:6667")
+	addr := flag.String("addr", "", "覆盖监听地址，例如 127.0.0.1:6868")
 	flag.Parse()
 
 	// Android 上没有 /etc/resolv.conf，必须先装带兜底的 DNS 解析器
