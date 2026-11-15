@@ -39,6 +39,14 @@ prepare() {
         log "缺少二进制：$MODDIR/bin/allin"
         return 1
     fi
+    # 在线更新留下的 allin.pending → 替换正式二进制（网关不能覆盖正在运行的自己）
+    if [ -f "$MODDIR/bin/allin.pending" ]; then
+        log "发现待应用的更新 allin.pending"
+        OLDPID=$(ss -tlnp 2>/dev/null | grep ":$PORT" | grep -oE 'pid=[0-9]+' | cut -d= -f2 | head -1)
+        [ -n "$OLDPID" ] && kill -9 "$OLDPID" 2>/dev/null && sleep 1
+        mv -f "$MODDIR/bin/allin.pending" "$MODDIR/bin/allin" 2>/dev/null
+        log "已应用更新"
+    fi
     # 二进制有更新（md5 不同）才复制；复制前杀旧进程避免 Text file busy
     NEWMD5=$(md5sum "$MODDIR/bin/allin" 2>/dev/null | cut -d' ' -f1)
     OLDMD5=$(md5sum "$RUNDIR/allin" 2>/dev/null | cut -d' ' -f1)

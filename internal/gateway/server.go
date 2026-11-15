@@ -64,6 +64,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/models", s.withAuth(s.handleModels))
 	s.mux.HandleFunc("/api/accounts", s.withAuth(s.handleAccounts))
 	s.mux.HandleFunc("/api/health", s.withAuth(s.handleHealth))
+	s.mux.HandleFunc("/api/update/check", s.withAuth(s.handleUpdateCheck))
+	s.mux.HandleFunc("/api/update/apply", s.withAuth(s.handleUpdateApply))
 	s.mux.HandleFunc("/api/providers", s.withAuth(s.handleProvidersOrWrite))
 	// 模型目录同步：POST 拉上游目录并写回配置，GET 只看不写。
 	s.mux.HandleFunc("/api/providers/sync", s.withAuth(s.handleProviderSync))

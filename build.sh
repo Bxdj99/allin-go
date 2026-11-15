@@ -27,9 +27,11 @@ case "$1" in
     ;;
 esac
 
-echo "==> 编译 linux/${ARCH} 静态二进制"
+# 从 module.prop 读版本号注入二进制（面板「检查更新」要用它比对）
+VER=$(grep '^version=' module/module.prop | cut -d= -f2 | tr -d ' ')
+echo "==> 编译 linux/${ARCH} 静态二进制（版本 ${VER}）"
 CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
-  go build -trimpath -ldflags "-s -w" -o "$OUT" .
+  go build -trimpath -ldflags "-s -w -X allin/internal/gateway.BuildVersion=${VER}" -o "$OUT" .
 
 SIZE=$(ls -lh "$OUT" | awk '{print $5}')
 echo "    $OUT  $SIZE"

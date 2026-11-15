@@ -390,6 +390,19 @@
 <!-- ==================== 5. 设置 ==================== -->
 <section class="page" id="page-settings">
   <div class="card">
+    <h2>版本与更新</h2>
+    <div class="kv"><span>当前版本</span><code id="verCurrent">-</code></div>
+    <div id="verUpdate" style="margin-top:8px"></div>
+    <div class="btnrow" style="margin-top:8px">
+      <button class="btn primary" id="btnCheckUpdate">检查更新</button>
+      <button class="btn" id="btnApplyUpdate" hidden>立即更新</button>
+    </div>
+    <div class="dim" style="font-size:11px;margin-top:8px">
+      从 GitHub Releases 拉取最新模块包。更新后需要重启手机（或重启模块）生效，账号与配置不受影响。
+    </div>
+  </div>
+
+  <div class="card">
     <h2>基本信息</h2>
     <div class="kv"><span>配置文件</span><code id="cfgPath">-</code></div>
     <div class="kv"><span>监听地址</span><code id="cfgListen">-</code></div>
@@ -677,7 +690,7 @@ const LOADERS = {
   providers: loadProviders,
   accounts: loadAccountsTab,
   usage: loadUsage,
-  settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); },
+  settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); await checkUpdate(); },
 };
 
 function switchTab(name) {
@@ -873,6 +886,55 @@ async function syncModels() {
     el('syncMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
     toast(e.message, 'err');
   } finally { if (btn) btn.disabled = false; }
+}
+
+// ---------- 在线更新 ----------
+async function checkUpdate() {
+  const btn = el('btnCheckUpdate');
+  if (btn) btn.disabled = true;
+  el('verUpdate').innerHTML = '<span class="dim">正在查询 GitHub…</span>';
+  el('btnApplyUpdate').hidden = true;
+  try {
+    const d = await api('/api/update/check');
+    el('verCurrent').textContent = d.current || '未知';
+    if (d.error) {
+      el('verUpdate').innerHTML = '<span class="err">检查失败：' + esc(d.error) + '</span>';
+      return;
+    }
+    if (!d.hasUpdate) {
+      el('verUpdate').innerHTML = '<span class="ok">已是最新版（' + esc(d.latest) + '）</span>';
+      return;
+    }
+    el('verUpdate').innerHTML =
+      '<div class="ok" style="font-size:13px">发现新版本：<b>' + esc(d.latest) + '</b>' +
+      (d.size ? ' <span class="dim">(' + Math.round(d.size / 1024) + ' KB)</span>' : '') + '</div>' +
+      (d.note ? '<div style="font-size:11px;margin-top:4px"><a href="' + esc(d.note) + '" target="_blank" rel="noopener noreferrer">查看发布说明</a></div>' : '');
+    el('btnApplyUpdate').hidden = false;
+  } catch (e) {
+    el('verUpdate').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+  } finally { if (btn) btn.disabled = false; }
+}
+
+async function applyUpdate() {
+  const btn = el('btnApplyUpdate');
+  if (!confirm('确定更新？会从 GitHub 下载并覆盖模块文件（账号与配置保留），完成后需要重启手机。')) return;
+  btn.disabled = true;
+  el('verUpdate').innerHTML = '<span class="dim">正在下载并安装，请勿关闭页面…（大文件可能要 1-2 分钟）</span>';
+  try {
+    const d = await api('/api/update/apply', { method: 'POST', body: {} });
+    if (d.ok) {
+      el('verUpdate').innerHTML =
+        '<div class="ok"><b>' + esc(d.message || '更新完成') + '</b></div>' +
+        '<div class="dim" style="font-size:12px;margin-top:6px">重启手机后，新版本才会真正运行。</div>';
+      el('btnApplyUpdate').hidden = true;
+      toast('更新完成，请重启手机', 'ok');
+    } else {
+      el('verUpdate').innerHTML = '<span class="err">' + esc(d.error || '更新失败') + '</span>';
+    }
+  } catch (e) {
+    el('verUpdate').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+    toast(e.message, 'err');
+  } finally { btn.disabled = false; }
 }
 
 // ---------- 思考强度 ----------
@@ -1825,6 +1887,8 @@ async function pollOnce(kind, start, gen, extra) {
 }
 
 on('btnSyncModels', 'click', syncModels);
+on('btnCheckUpdate', 'click', checkUpdate);
+on('btnApplyUpdate', 'click', applyUpdate);
 on('btnSaveEffort', 'click', saveEffort);
 on('btnReloadEffort', 'click', loadEffort);
 on('btnSavePrompt', 'click', savePrompt);

@@ -1,6 +1,6 @@
 id=allin
 name=All In
-version=v1.1.0-go
-versionCode=11000
+version=v1.5.0-go
+versionCode=15000
 author=M0SS
 description=纯 Go 静态二进制 AI 网关：OpenAI/Anthropic 双协议入口、账号池轮转与失败换号、WorkBuddy 完整反代（流式/非流式自适应）与每日签到；非 root 运行，常驻内存约 8MB
