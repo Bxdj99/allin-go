@@ -356,6 +356,15 @@
 <section class="page" id="page-providers">
   
   <div id="healthBanner" style="display:none;margin-bottom:12px;padding:10px 14px;border-radius:10px;font-size:13px"></div>
+
+  <!-- 端口迁移提示：只有当前用的是旧默认端口 3425 才出现 -->
+  <div id="portNotice" style="display:none;margin-bottom:12px;padding:12px 14px;border-radius:10px;font-size:13px;background:rgba(210,153,34,.12);border:1px solid #d29922;color:#d29922">
+    <div id="portNoticeText" style="line-height:1.6"></div>
+    <div class="btnrow" style="margin-top:8px">
+      <button class="btn sm primary" id="btnPortSwitch">切换到 <span id="portSuggest">6667</span></button>
+      <button class="btn sm" id="btnPortKeep">保持当前端口</button>
+    </div>
+  </div>
 <div class="card">
     <h2>供应商 <span class="dim" id="provCount"></span></h2>
     <div id="providerList"><div class="dim">加载中…</div></div>
@@ -797,7 +806,7 @@ on('keyTop', 'keydown', (e) => {
 
 /* ===================== 标签页切换 ===================== */
 const LOADERS = {
-  overview: async () => { await loadOverview(); await loadEffort(); await loadHealth(); await loadSchedule(); },
+  overview: async () => { await loadOverview(); await loadEffort(); await loadHealth(); await loadSchedule(); await loadPortNotice(); },
   providers: loadProviders,
   accounts: loadAccountsTab,
   usage: loadUsage,
@@ -1079,6 +1088,41 @@ async function syncModels() {
     if (typeof loadProviders === 'function') loadProviders();
   } catch (e) {
     el('syncMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+    toast(e.message, 'err');
+  } finally { if (btn) btn.disabled = false; }
+}
+
+// ---------- 端口迁移提示 ----------
+async function loadPortNotice() {
+  const box = el('portNotice');
+  if (!box) return;
+  try {
+    const d = await api('/api/port/notice');
+    if (!d.show) { box.style.display = 'none'; return; }
+    el('portSuggest').textContent = d.suggested;
+    el('portNoticeText').innerHTML =
+      '<b>⚠️ 端口提示</b><br>' + esc(d.reason) +
+      '<div style="margin-top:6px;font-size:12px">' +
+      '当前地址：<code>' + esc(d.endpoint) + '</code><br>' +
+      '切过去后要用：<code>' + esc(d.suggestedEndpoint) + '</code></div>';
+    box.style.display = 'block';
+  } catch (e) {
+    box.style.display = 'none';
+  }
+}
+
+async function switchPort() {
+  const btn = el('btnPortSwitch');
+  if (btn) btn.disabled = true;
+  try {
+    const d = await api('/api/port/switch', { method: 'POST', body: {} });
+    el('portNoticeText').innerHTML =
+      '<b class="ok">✅ 已写入配置：' + d.from + ' → ' + d.to + '</b><br>' +
+      '<span class="dim">网关会在 30 秒内自动重启到新端口。重启后请用：<code>' + esc(d.endpoint) + '</code></span>';
+    el('btnPortSwitch').hidden = true;
+    el('btnPortKeep').textContent = '知道了';
+    toast('已切换，等网关自动重启', 'ok');
+  } catch (e) {
     toast(e.message, 'err');
   } finally { if (btn) btn.disabled = false; }
 }
@@ -2562,6 +2606,8 @@ async function pollOnce(kind, start, gen, extra) {
 
 on('btnSyncModels', 'click', syncModels);
 on('autoCheckinToggle', 'change', toggleAutoCheckin);
+on('btnPortSwitch', 'click', switchPort);
+on('btnPortKeep', 'click', () => { const b = el('portNotice'); if (b) b.style.display = 'none'; });
 on('btnOvSave', 'click', saveOverviewPicks);
 on('btnOvProbe', 'click', probeOverviewModels);
 on('btnOvAll', 'click', () => { document.querySelectorAll('input[data-act="ovchk"]').forEach((x) => { x.checked = true; const l = x.closest('label'); if (l) l.classList.add('on'); }); });

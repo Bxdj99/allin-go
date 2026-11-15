@@ -12,6 +12,22 @@
 # 注意：模块目录里改完配置后需要重启模块（或运行一次本脚本）才会同步到运行目录。
 
 MODDIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+
+# 单实例保护：service.sh 每次执行都会起一个常驻守护循环，
+# 反复执行（或管理器重复触发）会堆出多个循环互相重启网关。
+# 用 pid 文件 + 存活检查挡住。
+LOCK="$MODDIR/run/service.pid"
+mkdir -p "$MODDIR/run" 2>/dev/null
+if [ -f "$LOCK" ]; then
+    OLD=$(cat "$LOCK" 2>/dev/null)
+    if [ -n "$OLD" ] && [ -d "/proc/$OLD" ]; then
+        # 已有实例在跑，直接退出
+        exit 0
+    fi
+fi
+echo $$ > "$LOCK"
+# 退出时清掉 pid 文件
+trap 'rm -f "$LOCK"' EXIT INT TERM
 RUNDIR=/data/local/tmp/allin-run
 MODDATA="$MODDIR/data"
 RUNDATA="$RUNDIR/data"
@@ -124,6 +140,17 @@ fi
     while true; do
         sleep 30
         ticks=$((ticks+1))
+
+        # 配置里的端口变了（用户从面板改的）→ 重启让新端口生效
+        CFGPORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$RUNDATA/config.json" 2>/dev/null | head -1)
+        if [ -n "$CFGPORT" ] && [ "$CFGPORT" != "$PORT" ]; then
+            log "端口配置变更 $PORT → $CFGPORT，重启网关"
+            OLDPID=$(ss -tlnp 2>/dev/null | grep ":$PORT" | grep -oE 'pid=[0-9]+' | cut -d= -f2 | head -1)
+            [ -n "$OLDPID" ] && kill -9 "$OLDPID" 2>/dev/null
+            PORT="$CFGPORT"
+            sleep 1
+            start_gateway
+        fi
 
         if ! port_up; then
             log "网关掉线，重拉"

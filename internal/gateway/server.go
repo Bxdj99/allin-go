@@ -97,6 +97,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/providers/models/probe", s.withAuth(s.handleModelProbe))
 	s.mux.HandleFunc("/api/presets", s.withAuth(s.handlePresets))
 	s.mux.HandleFunc("/api/presets/apply", s.withAuth(s.handlePresetApply))
+	s.mux.HandleFunc("/api/port/notice", s.withAuth(s.handlePortNotice))
+	s.mux.HandleFunc("/api/port/switch", s.withAuth(s.handlePortSwitch))
 	s.mux.HandleFunc("/api/schedule", s.withAuth(s.handleSchedule))
 	s.mux.HandleFunc("/api/workbuddy/catalog/diagnose", s.withAuth(s.handleCatalogDiagnose))
 	s.mux.HandleFunc("/api/workbuddy/credits", s.withAuth(s.handleWorkBuddyCredits))
