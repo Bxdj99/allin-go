@@ -53,6 +53,10 @@ DeepSeek、OpenAI、Anthropic、OpenRouter、SiliconFlow、腾讯混元、智谱
 
 ## 用法
 
+**第一次用？看 [使用教程](docs/USAGE.md)** —— 从刷入到跑通的完整步骤。
+
+
+
 ### 作为 KernelSU 模块
 
 ```bash

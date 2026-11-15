@@ -52,13 +52,12 @@ prepare() {
     chmod 755 "$RUNDIR/allin"
 
     mkdir -p "$MODDATA" 2>/dev/null
-    if [ ! -f "$MODDATA/config.json" ]; then
-        # 首次：让程序自己生成默认配置（先跑一次 -h 触发不了，直接留空即可）
-        log "配置不存在，将在首次启动时生成"
-    elif [ ! -f "$RUNDATA/config.json" ] || [ "$MODDATA/config.json" -nt "$RUNDATA/config.json" ]; then
+    if [ -f "$MODDATA/config.json" ] && { [ ! -f "$RUNDATA/config.json" ] || [ "$MODDATA/config.json" -nt "$RUNDATA/config.json" ]; }; then
         cp -f "$MODDATA/config.json" "$RUNDATA/config.json" 2>/dev/null
         log "配置已同步到运行目录"
     fi
+    # 首次刷入时两边都没配置：网关启动时会自己生成（随机口令），
+    # 启动成功后由下面的 sync_back 立刻回写到模块目录，保证「运行」键能读到。
 
     chown -R "$RUNAS:$RUNAS" "$RUNDIR" 2>/dev/null
     return 0
@@ -92,6 +91,7 @@ sleep 5
 
 if port_up; then
     log "网关已在运行"
+    sync_back
 else
     start_gateway
     n=0
@@ -101,6 +101,9 @@ else
         n=$((n+1))
     done
     [ $n -ge 20 ] && log "40 秒内未就绪，看 $RUNLOG"
+    # 网关起来后立刻把生成的 config.json 回写到模块目录，
+    # 否则「运行」键读不到口令（首次刷入的常见困惑）
+    port_up && sync_back
 fi
 
 # ---- 常驻守护 + 每日签到 + 配置回写 ----

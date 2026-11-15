@@ -178,7 +178,7 @@
   <div class="card">
     <h2>网关口令</h2>
     <div class="field" style="margin-bottom:0">
-      <input id="keyTop" placeholder="粘贴 authKey（也可用 URL 带 #key=xxx 打开）" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <input id="keyTop" placeholder="粘贴网关口令 authKey（点模块「运行」键可查看）" autocomplete="off" autocapitalize="off" spellcheck="false">
     </div>
     <div class="btnrow">
       <button class="btn primary" id="btnKeyTop">保存并刷新</button>
@@ -606,7 +606,7 @@ async function api(path, opts) {
     try { data = JSON.parse(text); } catch (e) { data = { raw: text }; }
   }
   if (!res.ok) {
-    if (res.status === 401) throw new Error('口令不对或未填写（HTTP 401），请到「总览」检查网关口令');
+    if (res.status === 401) throw new Error('未填口令或口令不对（HTTP 401）\n\n怎么拿口令：\n1. 模块管理器里点本模块的「运行」键，终端会打印「网关口令」\n2. 或用文件管理器看 /data/adb/modules/allin/data/config.json 里的 authKey\n3. 拿到后粘到上面输入框，点「保存并刷新」');
     throw new Error(pickErr(data, res.status));
   }
   return data;
