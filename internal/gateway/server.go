@@ -92,6 +92,8 @@ func (s *Server) routes() {
 	// 统一走 /api/auth/<vendor>/start 与 /api/auth/<vendor>/poll（见 provider_auth.go）。
 	// 上面三条精确路径优先匹配，这里只兜住其余子路径。
 	s.mux.HandleFunc("/api/auth/", s.withAuth(s.handleProviderAuth))
+	s.mux.HandleFunc("/api/schedule", s.withAuth(s.handleSchedule))
+	s.mux.HandleFunc("/api/workbuddy/credits", s.withAuth(s.handleWorkBuddyCredits))
 	s.mux.HandleFunc("/api/workbuddy/checkin", s.withAuth(s.handleWorkBuddyCheckin))
 	s.mux.HandleFunc("/api/workbuddy/checkin-status", s.withAuth(s.handleWorkBuddyCheckin))
 	// 任务中心：POST 跑全套（report→checkin→streak→claim-gift→compensation→

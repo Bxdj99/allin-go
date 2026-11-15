@@ -140,6 +140,30 @@ type ReasoningConfig struct {
 	Effort string `json:"effort,omitempty"`
 }
 
+// ScheduleConfig 是自动任务的开关。
+//
+// 这些开关由模块的 service.sh 定时读取执行，改完即时生效（脚本每 30 秒检查一次）。
+type ScheduleConfig struct {
+	// AutoCheckin 是否自动跑 WorkBuddy 全套任务（签到/连登/出行/抽奖等）。
+	// 用指针是为了区分「未配置」与「显式关闭」——未配置时默认开启。
+	AutoCheckin *bool `json:"autoCheckin,omitempty"`
+	// CheckinHours 是每天执行的小时（默认 9 点与 21 点）。
+	CheckinHours []int `json:"checkinHours,omitempty"`
+}
+
+// AutoCheckinEnabled 返回开关状态，未配置时默认 true。
+func (sc ScheduleConfig) AutoCheckinEnabled() bool {
+	return sc.AutoCheckin == nil || *sc.AutoCheckin
+}
+
+// Hours 返回执行小时，默认 [9, 21]。
+func (sc ScheduleConfig) Hours() []int {
+	if len(sc.CheckinHours) == 0 {
+		return []int{9, 21}
+	}
+	return sc.CheckinHours
+}
+
 // APIKey 是发给客户端的调用凭据（可与主网关口令并存）。
 type APIKey struct {
 	ID        string `json:"id"`
@@ -165,6 +189,8 @@ type Config struct {
 	Prompt PromptConfig `json:"prompt,omitempty"`
 	// Reasoning 是思考强度默认值
 	Reasoning ReasoningConfig `json:"reasoning,omitempty"`
+	// Schedule 是自动任务开关（由 service.sh 读取执行）
+	Schedule ScheduleConfig `json:"schedule,omitempty"`
 	// Setup 记录是否完成首次向导，供面板判断。
 	Setup struct {
 		Done   bool  `json:"done"`

@@ -199,12 +199,30 @@
 
   <div class="card">
     <h2>WorkBuddy 每日签到</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:8px 10px;background:#0b0f14;border-radius:8px">
+      <div>
+        <div style="font-size:13px">自动签到</div>
+        <div class="dim" style="font-size:11px">每天 <span id="autoHours">09:00 / 21:00</span> 自动跑全套任务</div>
+      </div>
+      <label style="position:relative;display:inline-block;width:48px;height:26px;flex-shrink:0">
+        <input type="checkbox" id="autoCheckinToggle" style="opacity:0;width:0;height:0">
+        <span id="autoCheckinSlider" style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#30363d;transition:.3s;border-radius:26px"></span>
+      </label>
+    </div>
     <div class="btnrow" style="margin-top:0">
       <button class="btn primary" id="btnCheckin">立刻签到</button>
       <button class="btn" id="btnCheckinStatus">查签到状态</button>
     </div>
     <div id="checkinSummary" style="margin-top:8px"></div>
     <div id="checkinBox"></div>
+  </div>
+
+  <div class="card">
+    <h2>WorkBuddy 积分 <span class="dim" id="creditTotal"></span></h2>
+    <div class="btnrow" style="margin-top:0">
+      <button class="btn" id="btnRefreshCredits">刷新余额</button>
+    </div>
+    <div id="creditBox" style="margin-top:10px"><span class="dim">点「刷新余额」查询各账号剩余积分</span></div>
   </div>
 
   <div class="card">
@@ -686,7 +704,7 @@ on('keyTop', 'keydown', (e) => {
 
 /* ===================== 标签页切换 ===================== */
 const LOADERS = {
-  overview: async () => { await loadOverview(); await loadEffort(); await loadHealth(); },
+  overview: async () => { await loadOverview(); await loadEffort(); await loadHealth(); await loadSchedule(); },
   providers: loadProviders,
   accounts: loadAccountsTab,
   usage: loadUsage,
@@ -885,6 +903,102 @@ async function syncModels() {
   } catch (e) {
     el('syncMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
     toast(e.message, 'err');
+  } finally { if (btn) btn.disabled = false; }
+}
+
+// ---------- 自动签到开关 ----------
+async function loadSchedule() {
+  try {
+    const d = await api('/api/schedule');
+    const t = el('autoCheckinToggle'), slider = el('autoCheckinSlider');
+    if (!t) return;
+    t.checked = !!d.autoCheckin;
+    paintToggle(t.checked);
+    const hrs = (d.checkinHours || []).map(h => String(h).padStart(2,'0') + ':00').join(' / ');
+    el('autoHours').textContent = hrs || '09:00 / 21:00';
+  } catch (e) { /* 未填口令时静默 */ }
+}
+
+function paintToggle(on) {
+  const slider = el('autoCheckinSlider');
+  if (!slider) return;
+  slider.style.background = on ? '#3fb950' : '#30363d';
+  // 用背景 + 圆形滑块模拟
+  slider.innerHTML = '<span style="position:absolute;content:\'\';height:20px;width:20px;left:' +
+    (on ? '24px' : '3px') + ';bottom:3px;background:#fff;transition:.3s;border-radius:50%"></span>';
+}
+
+async function toggleAutoCheckin(e) {
+  const on = e.target.checked;
+  paintToggle(on);
+  try {
+    const d = await api('/api/schedule', { method: 'POST', body: { autoCheckin: on } });
+    toast(on ? '已开启自动签到' : '已关闭自动签到', 'ok');
+  } catch (err) {
+    e.target.checked = !on;
+    paintToggle(!on);
+    toast(err.message, 'err');
+  }
+}
+
+// ---------- WorkBuddy 积分 ----------
+function fmtCredit(n) {
+  if (n === undefined || n === null) return '-';
+  const f = Number(n);
+  if (!isFinite(f)) return '-';
+  return (Math.round(f * 100) / 100).toLocaleString();
+}
+
+function renderCredits(d) {
+  const box = el('creditBox');
+  const rows = d.results || [];
+  if (!rows.length) {
+    box.innerHTML = '<span class="dim">没有可查询的 WorkBuddy 账号</span>';
+    return;
+  }
+  let html = '';
+  rows.forEach(r => {
+    const name = r.name || r.accountId || '?';
+    if (!r.ok) {
+      html += '<div style="padding:8px 0;border-bottom:1px solid #21262d">' +
+        '<div style="display:flex;justify-content:space-between;font-size:13px">' +
+        '<span>' + esc(name) + '</span><span class="err">查询失败</span></div>' +
+        '<div class="dim" style="font-size:11px;margin-top:2px">' + esc(String(r.error || '').slice(0,80)) + '</div></div>';
+      return;
+    }
+    const pct = Number(r.percent) || 0;
+    const color = pct > 50 ? '#3fb950' : pct > 20 ? '#d29922' : '#f85149';
+    html += '<div style="padding:8px 0;border-bottom:1px solid #21262d">' +
+      '<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">' +
+        '<span>' + esc(name) + '</span>' +
+        '<span style="color:' + color + '"><b>' + fmtCredit(r.remaining) + '</b>' +
+        '<span class="dim"> / ' + fmtCredit(r.total) + '</span></span>' +
+      '</div>' +
+      '<div style="height:4px;background:#21262d;border-radius:2px;overflow:hidden">' +
+        '<div style="width:' + Math.min(100, pct) + '%;height:100%;background:' + color + '"></div>' +
+      '</div>' +
+      '<div class="dim" style="font-size:11px;margin-top:3px">' +
+        pct.toFixed(1) + '% 剩余' +
+        (r.activePackages !== undefined ? ' · 有效包 ' + r.activePackages + '/' + r.packages : '') +
+        (r.expireAt ? ' · 最早到期 ' + esc(r.expireAt) : '') +
+        (r.note ? ' · ' + esc(r.note) : '') +
+      '</div></div>';
+  });
+  box.innerHTML = html;
+  el('creditTotal').textContent = d.totalCap > 0
+    ? '（总剩余 ' + fmtCredit(d.totalRemain) + ' / ' + fmtCredit(d.totalCap) + '）'
+    : '';
+}
+
+async function loadCredits() {
+  const btn = el('btnRefreshCredits');
+  if (btn) btn.disabled = true;
+  el('creditBox').innerHTML = '<span class="dim">正在查询各账号余额…</span>';
+  try {
+    const d = await api('/api/workbuddy/credits');
+    renderCredits(d);
+  } catch (e) {
+    el('creditBox').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
   } finally { if (btn) btn.disabled = false; }
 }
 
@@ -1887,6 +2001,8 @@ async function pollOnce(kind, start, gen, extra) {
 }
 
 on('btnSyncModels', 'click', syncModels);
+on('autoCheckinToggle', 'change', toggleAutoCheckin);
+on('btnRefreshCredits', 'click', loadCredits);
 on('btnCheckUpdate', 'click', checkUpdate);
 on('btnApplyUpdate', 'click', applyUpdate);
 on('btnSaveEffort', 'click', saveEffort);

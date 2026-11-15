@@ -134,7 +134,11 @@ fi
 
         H=$(date +%H)
         slot="$(date +%Y%m%d)-$H"
-        if { [ "$H" = "09" ] || [ "$H" = "21" ]; } && [ "$last" != "$slot" ]; then
+        # 读自动签到开关（面板可改，未配置时默认开启）
+        # config 里是 "autoCheckin": false / true；grep 不到就按开启处理
+        AC=$(sed -n 's/.*"autoCheckin"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$RUNDATA/config.json" 2>/dev/null | head -1)
+        [ -z "$AC" ] && AC=true
+        if [ "$AC" = "true" ] && { [ "$H" = "09" ] || [ "$H" = "21" ]; } && [ "$last" != "$slot" ]; then
             K=$(sed -n 's/.*"authKey"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$RUNDATA/config.json" 2>/dev/null | head -1)
             if [ -n "$K" ]; then
                 # 全套任务：一次请求跑完 report/checkin/streak/gift/comp/travel/lottery。
