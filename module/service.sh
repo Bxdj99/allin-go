@@ -21,7 +21,7 @@ RUNLOG="$RUNDIR/gateway.log"
 # 端口从配置读（首次安装会自动选一个空闲端口，避开 Magpie 等占用的 3425）
 PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' /data/local/tmp/allin-run/data/config.json 2>/dev/null | head -1)
 [ -z "$PORT" ] && PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$MODDIR/data/config.json" 2>/dev/null | head -1)
-[ -z "$PORT" ] && PORT=3425
+[ -z "$PORT" ] && PORT=6667
 # 任务中心接口：POST 跑全套（活跃上报→签到→连登兑换→领礼包→领补偿→补签→
 # 猫猫旅行→抽奖）；只读汇总在 $API_STATUS，出问题时先打它看现场。
 API="http://127.0.0.1:$PORT/api/workbuddy/tasks"

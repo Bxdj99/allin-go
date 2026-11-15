@@ -9,7 +9,7 @@ MODDIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 # 端口从配置读（首次安装会自动选一个空闲端口，避开 Magpie 等占用的 3425）
 PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' /data/local/tmp/allin-run/data/config.json 2>/dev/null | head -1)
 [ -z "$PORT" ] && PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$MODDIR/data/config.json" 2>/dev/null | head -1)
-[ -z "$PORT" ] && PORT=3425
+[ -z "$PORT" ] && PORT=6667
 
 port_up() {
     ss -tln 2>/dev/null | grep -q ":$PORT" && return 0

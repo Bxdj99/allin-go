@@ -3,7 +3,7 @@
 // 配置结构与 All In（Java 版）的 config.json 保持兼容，这样原来的配置可以直接搬过来：
 //
 //	{
-//	  "server":    {"host":"127.0.0.1","port":3425,"authKey":"mp-..."},
+//	  "server":    {"host":"127.0.0.1","port":6667,"authKey":"mp-..."},
 //	  "providers": [{...}],
 //	  "routing":   {"groupsEnabled":false,"bareModelFallback":false},
 //	  "usage":     {...}
@@ -269,9 +269,9 @@ func (s *Store) load() error {
 		}
 	}
 	if cfg.Server.Port == 0 {
-		// 首次安装：从 3425 往上找一个没人占的端口。
-		// 很多人同时装了 Magpie（也是 3425），固定端口必然冲突。
-		cfg.Server.Port = pickFreePort(3425)
+		// 首次安装：从 6667 往上找一个没人占的端口。
+		// Magpie 等同类网关默认 3425，避开它减少冲突。
+		cfg.Server.Port = pickFreePort(6667)
 	}
 	if cfg.Server.Host == "" {
 		// 默认只监听回环：这个服务能代理到付费账号，绝不该默认暴露到局域网

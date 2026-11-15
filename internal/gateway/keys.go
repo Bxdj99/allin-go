@@ -152,7 +152,7 @@ func (s *Server) handleKeyToggle(w http.ResponseWriter, r *http.Request) {
 func endpointOf(r *http.Request) string {
 	host := r.Host
 	if host == "" {
-		host = "127.0.0.1:3425"
+		host = "127.0.0.1:6667"
 	}
 	return "http://" + host + "/v1"
 }
