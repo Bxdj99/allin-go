@@ -39,7 +39,16 @@ prepare() {
         log "缺少二进制：$MODDIR/bin/allin"
         return 1
     fi
-    cp -f "$MODDIR/bin/allin" "$RUNDIR/allin" 2>/dev/null
+    # 二进制有更新（md5 不同）才复制；复制前杀旧进程避免 Text file busy
+    NEWMD5=$(md5sum "$MODDIR/bin/allin" 2>/dev/null | cut -d' ' -f1)
+    OLDMD5=$(md5sum "$RUNDIR/allin" 2>/dev/null | cut -d' ' -f1)
+    if [ "$NEWMD5" != "$OLDMD5" ]; then
+        log "检测到二进制更新，同步"
+        OLDPID=$(ss -tlnp 2>/dev/null | grep ":$PORT" | grep -oE 'pid=[0-9]+' | cut -d= -f2 | head -1)
+        [ -n "$OLDPID" ] && kill -9 "$OLDPID" 2>/dev/null && sleep 1
+        cp -f "$MODDIR/bin/allin" "$RUNDIR/allin" 2>/dev/null
+        chown "$RUNAS:$RUNAS" "$RUNDIR/allin" 2>/dev/null
+    fi
     chmod 755 "$RUNDIR/allin"
 
     mkdir -p "$MODDATA" 2>/dev/null

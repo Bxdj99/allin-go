@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"context"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -69,6 +70,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/providers/catalog", s.withAuth(s.handleProviderCatalog))
 	s.mux.HandleFunc("/api/providers/write", s.withAuth(s.handleProviderWrite))
 	s.mux.HandleFunc("/api/accounts/write", s.withAuth(s.handleAccountWrite))
+	s.mux.HandleFunc("/api/accounts/export", s.withAuth(s.handleAccountsExport))
+	s.mux.HandleFunc("/api/accounts/import", s.withAuth(s.handleAccountsImport))
 	s.mux.HandleFunc("/api/effort", s.withAuth(s.handleEffort))
 	s.mux.HandleFunc("/api/prompt", s.withAuth(s.handlePrompt))
 	s.mux.HandleFunc("/api/prompt/preset", s.withAuth(s.handlePromptPreset))
@@ -478,6 +481,14 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 // providerID 是真正提供服务的供应商（换号换模型后可能与请求最初选中的不同），
 // uc 是这条客户端请求的记账上下文。
 func (s *Server) relay(w http.ResponseWriter, resp *http.Response, stream, needBridge bool, clientProto protocol, model, providerID string, uc *usageCtx) {
+	// 关闭传播（上游 1.2.39 的 Antigravity 教训）：客户端断开后取消上游请求，
+	// 否则转发 goroutine 会陪着上游慢慢吐完才退出。
+	if rctx, ok := resp.Request.Context().(context.Context); ok {
+		ctx, cancel := context.WithCancel(rctx)
+		_ = ctx
+		_ = cancel
+		resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+	}
 	defer resp.Body.Close()
 
 	// 流式且不需要转换：边透传边扫 usage（SSE 最后一帧里），不缓存整条响应
@@ -755,6 +766,21 @@ const sseIdleTimeout = 90 * time.Second
 // sseHeartbeat 是空闲时向客户端写 SSE 注释的间隔。
 // 中间层（尤其移动网络、反向代理）会掐掉长时间无数据的连接，定期发心跳能保住。
 const sseHeartbeat = 15 * time.Second
+
+// relayContext 把「客户端连接断开」传播给上游响应体。
+// 上游 1.2.39 的教训：Antigravity 之前下游关闭时上游连接没关，转发 goroutine 一直挂着。
+// 这里在上游 Body 外再包一层：客户端写失败（已断开）时，关闭包装层 → 上游读取随之退出。
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	if b.cancel != nil {
+		b.cancel()
+	}
+	return b.ReadCloser.Close()
+}
 
 func flushCopy(w http.ResponseWriter, body io.Reader, onChunk func([]byte)) {
 	flusher, canFlush := w.(http.Flusher)

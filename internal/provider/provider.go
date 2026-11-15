@@ -334,6 +334,10 @@ func BuildRequest(kind, baseURL, apiPath, key string, acct *config.Account, body
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	// 流式场景明确禁用压缩：gzip 可能让整条回答结束才 flush（上游 1.2.39 实测教训，
+	// MiniMax npm 0.2.9 的坑）。Go 标准库在显式设置 Accept-Encoding 后会停用自动解压，
+	// 所以这里设 identity 而不是让它自动加 gzip。
+	req.Header.Set("Accept-Encoding", "identity")
 
 	switch kind {
 	case KindAnthropic:
