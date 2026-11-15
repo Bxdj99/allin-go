@@ -318,7 +318,9 @@
       <button class="btn" id="btnProvCancel" hidden>取消编辑</button>
     
       <button class="btn" id="btnSyncModels">同步上游模型目录</button>
-      <div id="syncMsg" style="width:100%;margin-top:8px"></div></div>
+      <button class="btn" id="btnDiagnoseCatalog">诊断模型目录</button>
+      <div id="syncMsg" style="width:100%;margin-top:8px"></div>
+      <div id="diagBox" style="width:100%;margin-top:8px"></div></div>
   </div>
 </section>
 
@@ -889,7 +891,7 @@ async function syncModels() {
       if (p.ok) {
         const added = (p.added || []).length;
         html += '<div class="kv"><span>' + esc(p.providerId) + '</span><span class="ok">' +
-          '拉到 ' + (p.fetched || 0) + ' 个，新增 ' + added + ' 个，共 ' + (p.total || 0) + ' 个' +
+          '上游 ' + (p.fetched || 0) + ' 个 · 新增 ' + added + ' · 配置共 ' + (p.total || 0) + ' 个' +
           (p.warning ? ' <span class="dim">(' + esc(p.warning) + ')</span>' : '') + '</span></div>';
       } else {
         html += '<div class="kv"><span>' + esc(p.providerId) + '</span><span class="err">' +
@@ -903,6 +905,48 @@ async function syncModels() {
   } catch (e) {
     el('syncMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
     toast(e.message, 'err');
+  } finally { if (btn) btn.disabled = false; }
+}
+
+// ---------- 模型目录诊断 ----------
+async function diagnoseCatalog() {
+  const btn = el('btnDiagnoseCatalog');
+  if (btn) btn.disabled = true;
+  el('diagBox').innerHTML = '<div class="dim" style="font-size:12px">正在逐个账号探测国内站与国际站…（最多 45 秒）</div>';
+  try {
+    const d = await api('/api/workbuddy/catalog/diagnose');
+    const rows = d.results || [];
+    if (!rows.length) {
+      el('diagBox').innerHTML = '<span class="dim">没有可诊断的账号</span>';
+      return;
+    }
+    let html = '';
+    rows.forEach(r => {
+      html += '<div class="card" style="margin:8px 0 0;background:#0b0f14;padding:10px">' +
+        '<div style="font-size:13px;margin-bottom:6px"><b>' + esc(r.accountId) + '</b>';
+      if (r.ok) {
+        html += ' <span class="ok">共 ' + r.total + ' 个模型</span>';
+      } else {
+        html += ' <span class="err">失败</span>';
+      }
+      html += '</div>';
+      if (r.error) {
+        html += '<div class="err" style="font-size:11px">' + esc(String(r.error).slice(0, 200)) + '</div>';
+      }
+      (r.probes || []).forEach(p => {
+        const host = String(p.origin || '').replace(/^https?:\/\//, '');
+        const okp = !p.error;
+        html += '<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0;' +
+          (okp ? '' : 'color:#f85149') + '">' +
+          '<span>' + esc(host) + ' / ' + esc(p.ua) + '</span>' +
+          '<span>' + (okp ? (p.kept || 0) + ' 个' : esc(String(p.error).slice(0, 60))) + '</span></div>';
+      });
+      html += '</div>';
+    });
+    el('diagBox').innerHTML = html + '<div class="dim" style="font-size:11px;margin-top:6px">' +
+      '两站数量不同是正常的（账号所在区域决定默认目录），同步时会取并集。</div>';
+  } catch (e) {
+    el('diagBox').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
   } finally { if (btn) btn.disabled = false; }
 }
 
@@ -2002,6 +2046,7 @@ async function pollOnce(kind, start, gen, extra) {
 
 on('btnSyncModels', 'click', syncModels);
 on('autoCheckinToggle', 'change', toggleAutoCheckin);
+on('btnDiagnoseCatalog', 'click', diagnoseCatalog);
 on('btnRefreshCredits', 'click', loadCredits);
 on('btnCheckUpdate', 'click', checkUpdate);
 on('btnApplyUpdate', 'click', applyUpdate);

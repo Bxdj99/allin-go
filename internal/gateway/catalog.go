@@ -126,6 +126,7 @@ func (s *Server) syncWorkBuddy(ctx context.Context, p *config.Provider) ([]strin
 	}
 	agg := &seen{set: make(map[string]bool, 64)}
 	var failures []string
+	var mergeNotes []string
 	used := 0
 
 	for _, a := range accs {
@@ -137,13 +138,29 @@ func (s *Server) syncWorkBuddy(ctx context.Context, p *config.Provider) ([]strin
 			// config.Account 目前没有存企业 ID（登录流程也没落盘），
 			// 所以这里不填；个人号本来也不需要这个头。
 		}
-		infos, err := workbuddy.FetchCatalog(ctx, origin, acc)
+		cr, err := workbuddy.FetchCatalogWithProbes(ctx, origin, acc)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("账号 %s: %v", accountLabel(a), err))
 			continue
 		}
 		used++
-		for _, mi := range infos {
+		// 记录该账号每个站点各自的产出，供面板说明「为什么数量是这么多」
+		if cr.Merged {
+			perOrigin := map[string]int{}
+			for _, pr := range cr.Probes {
+				if pr.Error == "" && pr.Kept > 0 {
+					perOrigin[pr.Origin] += pr.Kept
+				}
+			}
+			if len(perOrigin) > 1 {
+				var parts []string
+				for o, n := range perOrigin {
+					parts = append(parts, fmt.Sprintf("%s:%d", shortHost(o), n))
+				}
+				mergeNotes = append(mergeNotes, accountLabel(a)+" 双站合并("+strings.Join(parts, " + ")+")")
+			}
+		}
+		for _, mi := range cr.Models {
 			if id := strings.TrimSpace(mi.ID); id != "" && !agg.set[id] {
 				agg.set[id] = true
 				agg.order = append(agg.order, id)
@@ -155,6 +172,9 @@ func (s *Server) syncWorkBuddy(ctx context.Context, p *config.Provider) ([]strin
 		return nil, "", fmt.Errorf("所有账号均同步失败: %s", strings.Join(failures, "；"))
 	}
 	warn := ""
+	if len(mergeNotes) > 0 {
+		warn = strings.Join(mergeNotes, "；")
+	}
 	if len(failures) > 0 {
 		warn = fmt.Sprintf("%d/%d 个账号失败: %s", len(failures), len(accs), strings.Join(failures, "；"))
 	} else if used > 1 {
@@ -415,4 +435,12 @@ func (s *Server) StartAutoSyncModels(ctx context.Context) {
 		}
 		log.Printf("自动同步模型目录 [%s]: 新增 %d 个，共 %d 个", p.ID, len(added), len(merged))
 	}
+}
+
+// shortHost 把 URL 缩成域名，用于提示文案。
+func shortHost(o string) string {
+	o = strings.TrimPrefix(o, "https://")
+	o = strings.TrimPrefix(o, "http://")
+	o = strings.TrimSuffix(o, "/")
+	return o
 }

@@ -93,6 +93,7 @@ func (s *Server) routes() {
 	// 上面三条精确路径优先匹配，这里只兜住其余子路径。
 	s.mux.HandleFunc("/api/auth/", s.withAuth(s.handleProviderAuth))
 	s.mux.HandleFunc("/api/schedule", s.withAuth(s.handleSchedule))
+	s.mux.HandleFunc("/api/workbuddy/catalog/diagnose", s.withAuth(s.handleCatalogDiagnose))
 	s.mux.HandleFunc("/api/workbuddy/credits", s.withAuth(s.handleWorkBuddyCredits))
 	s.mux.HandleFunc("/api/workbuddy/checkin", s.withAuth(s.handleWorkBuddyCheckin))
 	s.mux.HandleFunc("/api/workbuddy/checkin-status", s.withAuth(s.handleWorkBuddyCheckin))
