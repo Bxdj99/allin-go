@@ -234,7 +234,9 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	_ = json.Unmarshal(body, &reqFields)
 	p, _, realModel, err := provider.Resolve(cfg, modelNoSuffix)
 	if err != nil {
-		s.fail(w, http.StatusBadRequest, err.Error())
+		// 模型解析失败都是「客户端参数问题」，统一 400。
+		// 同时把可用模型塞进 error 里，客户端/日志能直接看到该改成什么。
+		s.failModel(w, err.Error(), cfg)
 		return
 	}
 
@@ -892,6 +894,29 @@ func rewriteModel(body []byte, model string) ([]byte, error) {
 	}
 	m["model"] = raw
 	return json.Marshal(m)
+}
+
+// failModel 是模型解析失败时的专用响应：附带可用模型列表，方便直接改配置。
+func (s *Server) failModel(w http.ResponseWriter, msg string, cfg *config.Config) {
+	s.errors.Add(1)
+	available := provider.ModelList(cfg)
+	// 只取前 30 个，避免响应过大
+	trimmed := available
+	if len(trimmed) > 30 {
+		trimmed = trimmed[:30]
+	}
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error": map[string]any{
+			"message": msg,
+			"type":    "invalid_request_error",
+			"code":    "model_not_available",
+			"param":   "model",
+			// 客户端不会解析这个字段，但用户看日志/抓包能直接看到
+			"available_models": trimmed,
+			"total_models":     len(available),
+			"hint":             "模型名要写成 provider/model，可在面板「供应商」页的模型筛选里查看已暴露的模型",
+		},
+	})
 }
 
 func (s *Server) fail(w http.ResponseWriter, code int, msg string) {

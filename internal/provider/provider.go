@@ -213,13 +213,71 @@ func Resolve(cfg *config.Config, model string) (*config.Provider, *config.Accoun
 		// 显式指定 provider/model 时也尊重面板勾选：没勾中的模型当作不存在，
 		// 否则「只暴露几个模型」形同虚设——客户端硬写模型名照样能用。
 		if !p.IsModelExposed(name) {
-			return nil, nil, "", fmt.Errorf("模型未暴露给客户端: %s/%s（可在面板「供应商 → 模型筛选」里勾选）", pid, name)
+			// 区分两种情况：模型本身不存在 / 存在但没勾选
+			exists := false
+			for _, m := range p.Models {
+				if m == name {
+					exists = true
+					break
+				}
+			}
+			if exists {
+				return nil, nil, "", fmt.Errorf(
+					"模型 %s/%s 存在但没勾选暴露（到面板「供应商 → %s → 模型筛选」勾上并保存）",
+					pid, name, p.Name)
+			}
+			// 完全不存在：给出该供应商实际可用的模型，方便用户改
+			avail := p.Exposed()
+			hint := ""
+			if len(avail) > 0 {
+				n := len(avail)
+				if n > 5 {
+					n = 5
+				}
+				hint = "；该供应商可用：" + strings.Join(avail[:n], ", ")
+				if len(avail) > 5 {
+					hint += fmt.Sprintf(" 等 %d 个", len(avail))
+				}
+			}
+			return nil, nil, "", fmt.Errorf("供应商 %s 没有模型 %q%s", pid, name, hint)
 		}
 		return p, a, name, nil
 	}
 
 	if !cfg.Routing.BareModelFallback {
-		return nil, nil, "", fmt.Errorf("模型名需要写成 provider/model 形式（当前未开启裸名兜底）")
+		// 裸模型名兜底没开，但历史会话里常常存着裸名（换配置前记下的）。
+		// 这里做一次「唯一匹配」尝试：正好只有一个供应商暴露了同名模型就放行，
+		// 有歧义才报错。这样老会话不会因为换了配置就彻底用不了。
+		var matches []*config.Provider
+		for _, p := range cfg.Providers {
+			if p == nil || !p.IsEnabled() {
+				continue
+			}
+			for _, m := range p.Exposed() {
+				if m == model {
+					matches = append(matches, p)
+					break
+				}
+			}
+		}
+		switch len(matches) {
+		case 1:
+			if a := pickAccount(matches[0]); a != nil {
+				return matches[0], a, model, nil
+			}
+		case 0:
+			// 落到下面的统一报错
+		default:
+			names := make([]string, 0, len(matches))
+			for _, p := range matches {
+				names = append(names, p.ID)
+			}
+			return nil, nil, "", fmt.Errorf(
+				"模型 %q 在多个供应商下都有（%s），请写成 provider/model 形式",
+				model, strings.Join(names, ", "))
+		}
+		return nil, nil, "", fmt.Errorf(
+			"找不到模型 %q。请写成 provider/model 形式，例如 workbuddy/glm-5.3-flash", model)
 	}
 	for _, p := range cfg.Providers {
 		if p == nil || !p.IsEnabled() {
