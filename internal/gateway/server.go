@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -209,6 +210,19 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	s.requests.Add(1)
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	// 诊断：记录每个进来的请求（模型名 + 大小 + 是否流式）
+	{
+		var peek struct {
+			Model  string `json:"model"`
+			Stream bool   `json:"stream"`
+		}
+		_ = json.Unmarshal(body, &peek)
+		log.Printf("[REQ] path=%s model=%q stream=%v size=%d", apiPath, peek.Model, peek.Stream, len(body))
+		// 诊断：把请求体落盘，便于复现奇怪的结构问题
+		if len(body) > 100*1024 {
+			_ = os.WriteFile("/data/local/tmp/allin-last-request.json", body, 0o644)
+		}
+	}
 	if err != nil {
 		s.fail(w, http.StatusBadRequest, "读取请求体失败: "+err.Error())
 		return
@@ -236,6 +250,11 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	if err != nil {
 		// 模型解析失败都是「客户端参数问题」，统一 400。
 		// 同时把可用模型塞进 error 里，客户端/日志能直接看到该改成什么。
+		//
+		// 日志里记下原始 model 字段与请求体摘要，方便排查
+		// 「客户端到底发了个什么名字」这类问题。
+		log.Printf("[400 模型解析失败] model=%q err=%v bodyHead=%s",
+			head.Model, err, truncate(string(body), 300))
 		s.failModel(w, err.Error(), cfg)
 		return
 	}
@@ -299,6 +318,15 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		}
 	}
 
+	// 诊断：确认改写后请求体里的 model 是什么
+	{
+		var chk struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(upstreamBody, &chk)
+		log.Printf("[MODEL] client=%q realModel=%q upstreamModel=%q", head.Model, realModel, chk.Model)
+	}
+
 	// WorkBuddy 需要请求体适配：工具名规范化、tool_choice 归一化、补 reasoning_effort
 	if kind == provider.KindWorkBuddy {
 		effort := resolveEffort(cfg, effortSuffix, reqFields)
@@ -309,6 +337,12 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 			upstreamBody = prepared
 		} else {
 			log.Printf("WorkBuddy 请求预处理失败（按原样发送）: %v", perr)
+		}
+		// 上下文裁剪：上游硬上限 1,048,576 tokens，超了直接 400。
+		// Agent 会话（几千条消息 + 上百个工具）很容易撞墙，这里主动裁。
+		if tr, terr := workbuddy.TrimContext(upstreamBody); terr == nil && tr.Trimmed {
+			log.Printf("上下文裁剪：丢弃 %d 条历史，估算 %d tokens", tr.Dropped, tr.Estimated)
+			upstreamBody = tr.Body
 		}
 		// WorkBuddy 只接受流式：上游一律 stream:true，客户端要非流式时本地聚合
 		if forced, ferr := workbuddy.ForceStream(upstreamBody); ferr == nil {
@@ -450,6 +484,10 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				continue
 			}
 
+			// 记录所有非 2xx 响应（含 4xx），之前只有 401/429/5xx 才记
+			if resp.StatusCode >= 400 {
+				log.Printf("[UPSTREAM] %d %s/%s model=%s", resp.StatusCode, sp.ID, acct.ID, step.Model)
+			}
 			if resp.StatusCode == 401 || resp.StatusCode == 429 || resp.StatusCode >= 500 {
 				raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 				resp.Body.Close()

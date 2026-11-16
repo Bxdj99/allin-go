@@ -226,6 +226,12 @@ func Resolve(cfg *config.Config, model string) (*config.Provider, *config.Accoun
 					"模型 %s/%s 存在但没勾选暴露（到面板「供应商 → %s → 模型筛选」勾上并保存）",
 					pid, name, p.Name)
 			}
+			// 兼容别名：上游/旧配置里常见的「基名」自动挂到真实模型上。
+			// 例：glm-5.3 → glm-5.3-flash（当前列表里没有 glm-5.3）
+			if resolved := matchAlias(name, p); resolved != "" {
+				return p, a, resolved, nil
+			}
+
 			// 完全不存在：给出该供应商实际可用的模型，方便用户改
 			avail := p.Exposed()
 			hint := ""
@@ -588,4 +594,32 @@ func modelOf(body []byte) string {
 		return ""
 	}
 	return strings.TrimSpace(m.Model)
+}
+
+// matchAlias 在供应商的暴露模型里找「最接近」的一个。
+//
+// 用于兼容历史会话里记下的旧模型名。规则保守：
+//   - 前缀匹配：请求名是某个可用模型的前缀（glm-5.3 → glm-5.3-flash）
+//   - 后缀匹配：可用模型名以请求名结尾
+//   - 只接受唯一解；有多个候选就当没有（避免指向错误模型）
+func matchAlias(want string, p *config.Provider) string {
+	if p == nil || want == "" {
+		return ""
+	}
+	want = strings.ToLower(want)
+	var hits []string
+	for _, m := range p.Exposed() {
+		lm := strings.ToLower(m)
+		if lm == want {
+			return m
+		}
+		if strings.HasPrefix(lm, want+"-") || strings.HasPrefix(lm, want+".") ||
+			strings.HasSuffix(lm, "-"+want) {
+			hits = append(hits, m)
+		}
+	}
+	if len(hits) == 1 {
+		return hits[0]
+	}
+	return ""
 }
