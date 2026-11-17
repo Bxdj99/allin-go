@@ -344,6 +344,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	var preTrimBody []byte
 	trimRounds := 0
 	trimBudget := 0
+	softRetries := 0
 
 	// WorkBuddy 需要请求体适配：工具名规范化、tool_choice 归一化、补 reasoning_effort
 	if kind == provider.KindWorkBuddy {
@@ -549,7 +550,28 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 					s.fail(w, http.StatusBadRequest, fallback.ChannelBlockedHint())
 					return
 				}
-				// 上游嫌请求太大（含 tool 配对断裂）：换更小预算重裁再发。
+				// code 11148（tool calls and tool results do not match）。
+				//
+				// 实测结论：同一份字节重发就能成功，与请求大小、图片数量、
+				// tool 配对结构都无关（配对 743 对零缺失，5 张图连发 5 次全过）。
+				// 这是上游的瞬态拒绝，所以正确做法是「原样重发」，
+				// 而不是改动请求 —— 改请求反而会引入新问题。
+				if kind == provider.KindWorkBuddy && fallback.IsTransientToolReject(string(sniff)) &&
+					softRetries < maxSoftRetries {
+					resp.Body.Close()
+					softRetries++
+					log.Printf("上游瞬态拒绝（11148），原样重发第 %d 次: %s/%s",
+						softRetries, sp.ID, acct.ID)
+					// 不换号、不改请求、不消耗换号次数
+					attempt--
+					select {
+					case <-time.After(time.Duration(300*softRetries) * time.Millisecond):
+					case <-r.Context().Done():
+						return
+					}
+					continue
+				}
+				// 其它「请求太大」类错误：才用更小预算重裁再发。
 				// 不限制图片、不无脑截断，只在真被拒时才逐级收紧。
 				if kind == provider.KindWorkBuddy && fallback.IsContextTooLarge(string(sniff)) &&
 					trimRounds < maxTrimRounds && len(preTrimBody) > 0 {
@@ -1098,3 +1120,7 @@ const (
 	maxTrimRounds = 4
 	minTrimBudget = 120_000
 )
+
+// maxSoftRetries 是「上游瞬态拒绝」的原地重发次数。
+// 11148 属瞬时状态，重发通常就过；给 2 次足够，避免掩盖真问题。
+const maxSoftRetries = 2

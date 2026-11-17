@@ -43,6 +43,8 @@ PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' /data/local
 API="http://127.0.0.1:$PORT/api/workbuddy/tasks"
 API_STATUS="http://127.0.0.1:$PORT/api/workbuddy/tasks/status"
 RUNAS=2000
+# busybox 路径在探测函数里定，这里先占位
+BUSYBOX=""
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
@@ -75,8 +77,8 @@ prepare() {
         log "已应用更新"
     fi
     # 二进制有更新（md5 不同）才复制；复制前杀旧进程避免 Text file busy
-    NEWMD5=$(md5sum "$MODDIR/bin/allin" 2>/dev/null | cut -d' ' -f1)
-    OLDMD5=$(md5sum "$RUNDIR/allin" 2>/dev/null | cut -d' ' -f1)
+    NEWMD5=$(file_sum "$MODDIR/bin/allin")
+    OLDMD5=$(file_sum "$RUNDIR/allin")
     if [ "$NEWMD5" != "$OLDMD5" ]; then
         log "检测到二进制更新，同步"
         OLDPID=$(ss -tlnp 2>/dev/null | grep ":$PORT" | grep -oE 'pid=[0-9]+' | cut -d= -f2 | head -1)
@@ -98,11 +100,76 @@ prepare() {
     return 0
 }
 
+# 计算文件校验值。优先 md5sum，其次 busybox md5sum，都没有就退回大小+时间戳。
+# 目的只是判断「二进制有没有变」，不需要密码学强度。
+file_sum() {
+    if [ ! -f "$1" ]; then
+        echo "missing"
+        return
+    fi
+    if command -v md5sum >/dev/null 2>&1; then
+        md5sum "$1" 2>/dev/null | cut -d' ' -f1
+        return
+    fi
+    if [ -n "$BUSYBOX" ]; then
+        "$BUSYBOX" md5sum "$1" 2>/dev/null | cut -d' ' -f1
+        return
+    fi
+    # 兜底：大小 + 修改时间
+    set -- $(wc -c < "$1") $(date -r "$1" +%s 2>/dev/null || echo 0)
+    echo "$1-$2"
+}
+
+# 定位 busybox。
+#
+# 不能直接写 `busybox`：不同 root 方案装的路径不同，PATH 里也未必有。
+# 见过 Magisk / KernelSU / APatch 各自的目录，也见过系统自带 /system/bin 的。
+find_busybox() {
+    for c in \
+        /data/adb/magisk/busybox \
+        /data/adb/ksu/bin/busybox \
+        /data/adb/ap/bin/busybox \
+        /data/adb/modules/busybox-ndk/system/bin/busybox \
+        /system/xbin/busybox \
+        /system/bin/busybox \
+        /vendor/bin/busybox
+    do
+        [ -x "$c" ] && { echo "$c"; return 0; }
+    done
+    # 最后退回 PATH 查找
+    if command -v busybox >/dev/null 2>&1; then
+        command -v busybox
+        return 0
+    fi
+    return 1
+}
+
+# 以指定 uid 启动某个命令，尽量保持「降权运行」。
+#
+# 优先级：
+#   1. busybox setuidgid（最通用）
+#   2. su/setpriv 之类系统自带（少见）
+#   3. 都没有就 warn 并从 root 启动 —— 可用性优先于权限隔离
+start_as_uid() {
+    uid="$1"; shift
+    # setsid 也可能没有：没有就直接后台启动，
+    # 好处是任何设备都能起来，代价是进程不脱离父会话。
+    launcher=""
+    command -v setsid >/dev/null 2>&1 && launcher="setsid"
+
+    if [ -n "$BUSYBOX" ]; then
+        $launcher "$BUSYBOX" setuidgid "$uid" "$@" >> "$RUNLOG" 2>&1 < /dev/null &
+        return 0
+    fi
+    log "警告：找不到 busybox，无法降权到 uid=$uid，改为 root 启动（功能可用，但权限隔离失效）"
+    $launcher "$@" >> "$RUNLOG" 2>&1 < /dev/null &
+    return 0
+}
+
 start_gateway() {
     prepare || return 1
     log "启动网关（uid=$RUNAS）"
-    setsid busybox setuidgid "$RUNAS" "$RUNDIR/allin" -config "$RUNDATA/config.json" \
-        >> "$RUNLOG" 2>&1 < /dev/null &
+    start_as_uid "$RUNAS" "$RUNDIR/allin" -config "$RUNDATA/config.json"
 }
 
 # 把运行目录里的配置回写到模块（保存签到记录等）
@@ -116,12 +183,25 @@ sync_back() {
     fi
 }
 
+# 探测 busybox（找不到也不致命，会退化为 root 启动）
+BUSYBOX=$(find_busybox)
+if [ -n "$BUSYBOX" ]; then
+    log "使用 busybox: $BUSYBOX"
+else
+    log "未找到 busybox，将以 root 身份启动网关"
+fi
+
 # ---- 等系统起来 ----
 i=0
-while [ "$(getprop sys.boot_completed)" != "1" ] && [ $i -lt 150 ]; do
-    sleep 2
-    i=$((i+1))
-done
+# getprop 也可能不存在：拿不到就别死等，直接往下走
+if command -v getprop >/dev/null 2>&1; then
+    while [ "$(getprop sys.boot_completed)" != "1" ] && [ $i -lt 150 ]; do
+        sleep 2
+        i=$((i+1))
+    done
+else
+    log "未找到 getprop，跳过开机等待"
+fi
 sleep 5
 
 if port_up; then

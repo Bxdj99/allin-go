@@ -153,3 +153,18 @@ func toLower(s string) string {
 	}
 	return string(b)
 }
+
+// IsTransientToolReject 判断是不是「上游瞬态拒绝」，可以原样重发。
+//
+// 上游原话：
+//
+//	{"code":11148,"msg":"tool calls and tool results do not match,
+//	 please start a new conversation and retry"}
+//
+// 实测同一份字节重发即成功，且 743 对 tool 配对零缺失、5 张图连发 5 次全过，
+// 说明它与请求内容无关，是上游侧的瞬态状态。因此应当原样重试，
+// 而不是修改请求（改请求会引入新风险）。
+func IsTransientToolReject(body string) bool {
+	return contains(toLower(body), "tool calls and tool results do not match") ||
+		contains(body, `"code":11148`)
+}
