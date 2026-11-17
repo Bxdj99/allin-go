@@ -19,6 +19,8 @@
 - **双协议入口**：`/v1/chat/completions`（OpenAI）、`/v1/messages`（Anthropic），两边可自动互转（含 `tools` / `tool_use` / `tool_result`）
 - **账号池**：least-used 轮转、失败换号重试、分级冷却（401 / 429 / 5xx 各不同）
 - **积分感知选号**：多账号按负载轮转，同一负载下优先派给**额度先到期**的号，避免积分过期作废（WorkBuddy，积分快照 10 分钟刷新一次；`/api/accounts` 可看每号余额与到期时间）
+- **局域网共用**：面板把监听地址改成 `0.0.0.0`，同一 Wi-Fi 下其它设备即可接入（详见 [docs/USAGE.md](docs/USAGE.md)）
+- **账号批量导入/导出**：面板一键导出 JSON / 导入合并，含凭据，换机迁移用
 - **路由组**：`group/<id>` 按顺序挑目标
 - **WorkBuddy 完整反代**：上游只吃流式 → 本地聚合给非流式客户端；工具名规范化、`tool_choice` 归一化、`reasoning_effort` 补齐
 - **每日签到**：WorkBuddy 多账号 `daily-checkin`，09/21 点自动

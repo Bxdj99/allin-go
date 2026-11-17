@@ -418,6 +418,44 @@
   </div>
 
   <div class="card">
+    <h2>批量导出 / 导入账号</h2>
+    <div class="dim" style="margin-bottom:10px;font-size:12px">
+      导出的文件包含账号凭据（access / API Key），<b>不要发给别人或上传到公开位置</b>。
+      换机迁移、备份、在本机与局域网设备之间搬运账号池时用它。
+    </div>
+    <div class="field">
+      <label>导出范围</label>
+      <select id="fIoScope">
+        <option value="">全部供应商</option>
+      </select>
+    </div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnExportAccounts">导出为 JSON 文件</button>
+      <button class="btn" id="btnCopyExport">复制到剪贴板</button>
+    </div>
+    <hr style="border:none;border-top:1px solid rgba(127,127,127,.22);margin:14px 0">
+    <div class="field">
+      <label>导入方式</label>
+      <select id="fImportMode">
+        <option value="merge">merge —— 合并（同 id 覆盖，无则追加）</option>
+        <option value="skip">skip —— 跳过已存在的同 id 账号</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>粘贴 JSON（留空则用下面的文件）</label>
+      <textarea id="fImportJson" rows="5" placeholder='{"accounts":[{"providerId":"workbuddy","id":"...","access":"...","uid":"..."}]}' style="width:100%;font-family:ui-monospace,monospace;font-size:12px"></textarea>
+    </div>
+    <div class="field" style="margin-bottom:0">
+      <label>选择 JSON 文件</label>
+      <input type="file" id="fImportFile" accept=".json,application/json">
+    </div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnImportAccounts">导入</button>
+    </div>
+    <div id="ioBox" class="dim" style="margin-top:8px;font-size:12px"></div>
+  </div>
+
+  <div class="card">
     <h2>手动添加 / 覆盖账号</h2>
     <div class="field">
       <label>所属供应商</label>
@@ -1766,6 +1804,7 @@ async function loadProviders() {
     renderProviderSelect();
     renderProviderList();
     renderAccountGroups();
+    refreshIoScope();
   } catch (e) {
     el('providerList').innerHTML = '<div class="err">加载失败：' + esc(e.message) + '</div>';
     el('accountGroups').innerHTML = '<div class="err">加载失败：' + esc(e.message) + '</div>';
@@ -2172,6 +2211,168 @@ async function deleteAccount(pid, aid) {
   } catch (e) {
     toast('删除失败：' + e.message, 'err');
   }
+}
+
+/* ===================== 批量导入 / 导出账号 ===================== */
+
+// 结果缓存，导出按钮和复制按钮共用一次请求
+let _exportCache = null;
+
+async function fetchExport() {
+  const scope = el('fIoScope').value;
+  const q = scope ? ('?providerId=' + encodeURIComponent(scope)) : '';
+  return await api('/api/accounts/export' + q);
+}
+
+function exportFileName() {
+  const scope = el('fIoScope').value || 'all';
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const ts = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) +
+             '-' + pad(d.getHours()) + pad(d.getMinutes());
+  return 'allin-accounts-' + scope + '-' + ts + '.json';
+}
+
+on('btnExportAccounts', 'click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  el('ioBox').textContent = '正在导出…';
+  try {
+    const data = await fetchExport();
+    _exportCache = data;
+    const n = (data.accounts || []).length;
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = exportFileName();
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    el('ioBox').innerHTML = '已导出 <b>' + n + '</b> 个账号。文件含凭据，注意保管。';
+    toast('已导出 ' + n + ' 个账号', 'ok');
+  } catch (err) {
+    el('ioBox').textContent = '导出失败：' + err.message;
+    toast('导出失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+on('btnCopyExport', 'click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  el('ioBox').textContent = '正在复制…';
+  try {
+    const data = _exportCache || await fetchExport();
+    _exportCache = data;
+    const text = JSON.stringify(data, null, 2);
+    let ok = false;
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(text); ok = true; } catch (e) { ok = false; }
+    }
+    if (!ok) {
+      // http:// 下（局域网常见）没有剪贴板 API，退回 textarea + execCommand
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+      ta.remove();
+    }
+    const n = (data.accounts || []).length;
+    if (ok) {
+      el('ioBox').innerHTML = '已复制 <b>' + n + '</b> 个账号到剪贴板。';
+      toast('已复制到剪贴板', 'ok');
+    } else {
+      el('ioBox').textContent = '复制失败：浏览器不允许。请改用「导出为 JSON 文件」。';
+      toast('复制失败，请用导出文件', 'err');
+    }
+  } catch (err) {
+    el('ioBox').textContent = '复制失败：' + err.message;
+    toast('复制失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// 选了文件就把内容读进 textarea，让用户能看见并确认
+on('fImportFile', 'change', async (e) => {
+  const f = e.currentTarget.files && e.currentTarget.files[0];
+  if (!f) return;
+  try {
+    const text = await f.text();
+    el('fImportJson').value = text;
+    el('ioBox').textContent = '已读取 ' + f.name + '（' + f.size + ' 字节），确认后点「导入」';
+  } catch (err) {
+    el('ioBox').textContent = '读取文件失败：' + err.message;
+    toast('读取文件失败', 'err');
+  }
+});
+
+on('btnImportAccounts', 'click', async (e) => {
+  const btn = e.currentTarget;
+  const raw = el('fImportJson').value.trim();
+  if (!raw) { toast('先粘贴 JSON 或选择文件', 'err'); return; }
+
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch (err) {
+    el('ioBox').textContent = 'JSON 格式错误：' + err.message;
+    toast('JSON 格式错误', 'err');
+    return;
+  }
+  const accounts = Array.isArray(payload) ? payload : (payload.accounts || []);
+  if (!accounts.length) {
+    toast('文件里没有 accounts 数组', 'err');
+    return;
+  }
+  const mode = el('fImportMode').value;
+  if (!confirm('将导入 ' + accounts.length + ' 个账号（模式：' + mode + '）。\n' +
+               'merge 会用文件里的同名 id 覆盖现有账号的凭据。继续？')) return;
+
+  btn.disabled = true;
+  el('ioBox').textContent = '正在导入…';
+  try {
+    const body = {
+      mode: mode,
+      accounts: accounts,
+      providerKeys: payload.providerKeys || [],
+    };
+    const r = await api('/api/accounts/import', { method: 'POST', body: body });
+    const parts = [];
+    if (r.added) parts.push('新增 ' + r.added);
+    if (r.updated) parts.push('更新 ' + r.updated);
+    if (r.skipped) parts.push('跳过 ' + r.skipped);
+    const summary = parts.length ? parts.join('，') : '没有变化';
+    el('ioBox').innerHTML = '导入完成：<b>' + summary + '</b>';
+    toast('导入完成：' + summary, 'ok');
+    el('fImportJson').value = '';
+    el('fImportFile').value = '';
+    _exportCache = null;
+    await loadProviders();
+    loadOverview();
+  } catch (err) {
+    el('ioBox').textContent = '导入失败：' + err.message;
+    toast('导入失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// 导出范围下拉：从已加载的供应商里填，保持「全部供应商」在首位
+function refreshIoScope() {
+  const sel = el('fIoScope');
+  if (!sel) return;
+  const keep = sel.value;
+  const list = (S.providers || []).map((p) => p.id).filter(Boolean);
+  sel.innerHTML = '<option value="">全部供应商</option>' +
+    list.map((id) => '<option value="' + esc(id) + '">' + esc(id) + '</option>').join('');
+  if (keep && list.indexOf(keep) >= 0) sel.value = keep;
 }
 
 on('btnAccountSave', 'click', async (e) => {
