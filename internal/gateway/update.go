@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -166,7 +167,17 @@ func checkUpdate(ctx context.Context) UpdateStatus {
 			break
 		}
 	}
-	st.HasUpdate = st.URL != "" && normalizeVer(st.Latest) != normalizeVer(st.Current)
+	// 必须比较大小，不能只判不等：当本地跑的是未发布 Release 的版本（比如刚自己
+	// 构建了 v1.18.0，但 GitHub 上最新 Release 还停在 v1.17.1），只判不等会把
+	// 旧版本当成"有更新"，用户一点就会降级，丢掉本地这版的功能。
+	if st.URL != "" {
+		if cmp, ok := compareVer(st.Latest, st.Current); ok {
+			st.HasUpdate = cmp > 0
+		} else {
+			// 版本号解析不了时退回原来的判不等，至少不比现在更差
+			st.HasUpdate = normalizeVer(st.Latest) != normalizeVer(st.Current)
+		}
+	}
 	return st
 }
 
@@ -176,6 +187,60 @@ func normalizeVer(v string) string {
 	v = strings.TrimPrefix(v, "v")
 	v = strings.TrimSuffix(v, "-go")
 	return v
+}
+
+// compareVer 比较两个版本号大小：返回 1 表示 a 比 b 新，-1 表示更旧，0 表示相同。
+// ok=false 表示至少有一边解析不出数字版本（调用方应退回字符串比较）。
+func compareVer(a, b string) (int, bool) {
+	pa, oka := parseVer(a)
+	pb, okb := parseVer(b)
+	if !oka || !okb {
+		return 0, false
+	}
+	for i := 0; i < 3; i++ {
+		if pa[i] != pb[i] {
+			if pa[i] > pb[i] {
+				return 1, true
+			}
+			return -1, true
+		}
+	}
+	return 0, true
+}
+
+// parseVer 取版本号前三位数字，忽略 -go / -beta 之类的后缀。
+func parseVer(v string) ([3]int, bool) {
+	var out [3]int
+	v = normalizeVer(v)
+	if v == "" {
+		return out, false
+	}
+	// 只看主版本部分，遇到非数字非点号就停
+	end := len(v)
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if (c < '0' || c > '9') && c != '.' {
+			end = i
+			break
+		}
+	}
+	// 一个数字都没取到（如 "dev"）说明不是版本号，要判失败而不是当成 0.0.0
+	if end == 0 || !strings.ContainsAny(v[:end], "0123456789") {
+		return out, false
+	}
+	parts := strings.Split(v[:end], ".")
+	for i := 0; i < 3; i++ {
+		if i >= len(parts) || parts[i] == "" {
+			out[i] = 0
+			continue
+		}
+		n, err := strconv.Atoi(parts[i])
+		if err != nil {
+			return out, false
+		}
+		out[i] = n
+	}
+	return out, true
 }
 
 // downloadFile 下载到本地并返回校验值。
