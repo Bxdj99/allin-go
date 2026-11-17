@@ -209,6 +209,9 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		return
 	}
 	s.requests.Add(1)
+	// 首字延迟归因用：从收到请求开始计时，各阶段累加进 ttft。
+	// 只用于日志，不参与任何逻辑判断。
+	tReq := time.Now()
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	// 诊断：记录每个进来的请求（模型名 + 大小 + 是否流式）
@@ -476,6 +479,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 			}
 			upreq = upreq.WithContext(r.Context())
 
+			tTry := time.Now()
 			resp, err := provider.HTTPClient.Do(upreq)
 			if err != nil {
 				uc.fail(sp.ID, step.Model)
@@ -486,6 +490,11 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 			}
 
 			// 记录所有非 2xx 响应（含 4xx），之前只有 401/429/5xx 才记
+			// 首字延迟归因：这一轮到上游拿到响应头用了多久。
+			// hasResp=true 说明延迟主要来自上游，而不是网关内部处理。
+			log.Printf("[TTFT] upstream=%dms attempt=%d acct=%s status=%d total=%dms",
+				time.Since(tTry).Milliseconds(), attempt+1, acct.ID,
+				resp.StatusCode, time.Since(tReq).Milliseconds())
 			if resp.StatusCode >= 400 {
 				log.Printf("[UPSTREAM] %d %s/%s model=%s", resp.StatusCode, sp.ID, acct.ID, step.Model)
 			}

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,6 +83,12 @@ func (s *Server) refreshCredits(parent context.Context) {
 			if err != nil {
 				// 查不到就保留旧快照，让它自然过期失效，不要清零余额
 				log.Printf("积分刷新失败: %s/%s: %v", j.providerID, j.accountID, err)
+				// 凭据本身失效（401/403）的账号直接在账号池里标记失败，
+				// 让 Pick 跳过它。否则每次请求都可能选中一个死号，
+				// 白等一轮上游往返再换号，首字延迟白白翻倍。
+				if isAuthError(err) {
+					s.pool.Fail(j.providerID, j.accountID, 401, "积分接口鉴权失败")
+				}
 				return
 			}
 			if sum == nil {
@@ -108,4 +115,17 @@ func parseCreditTime(s string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return t, true
+}
+
+// isAuthError 判断积分查询失败是不是「凭据失效」这一类。
+// 上游对失效 token 返回 401/403，错误信息里带 http=401 / http=403。
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "http=401") ||
+		strings.Contains(msg, "http=403") ||
+		strings.Contains(msg, "401 Authorization Required") ||
+		strings.Contains(msg, "403 Forbidden")
 }
