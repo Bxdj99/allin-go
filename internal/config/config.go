@@ -31,6 +31,15 @@ type Server struct {
 	AuthKey string `json:"authKey"`
 	// AuthKeyOrigin 记录口令来源：first-run-random 表示首次启动自动生成。
 	AuthKeyOrigin string `json:"authKeyOrigin,omitempty"`
+	// LogCapture 是总日志开关。默认开启。
+	// 关闭后：不写 gateway.log（所有 log.Printf 静默），
+	// 也不采集「日志」页的请求样本，内存里已有的样本一并清掉。
+	LogCapture *bool `json:"logCapture,omitempty"`
+}
+
+// LogCaptureEnabled 返回日志采样是否开启（未设置视为开启）。
+func (s *Server) LogCaptureEnabled() bool {
+	return s.LogCapture == nil || *s.LogCapture
 }
 
 // Account 是某个供应商下的一个账号（可能是 API Key，也可能是登录态）。

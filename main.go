@@ -44,6 +44,11 @@ func main() {
 	}
 	cfg := store.Snapshot()
 
+	// 日志总开关：接上可控 Writer，并按配置恢复开关状态。
+	// 必须在开始输出日志之前接，否则前几行会漏过去。
+	gateway.SetupLogging()
+	gateway.SetLogEnabled(cfg.Server.LogCaptureEnabled())
+
 	listen := *addr
 	if listen == "" {
 		listen = net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port))

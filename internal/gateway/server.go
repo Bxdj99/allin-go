@@ -42,11 +42,15 @@ type Server struct {
 	errors   atomic.Int64
 	switches atomic.Int64
 	started  time.Time
+
+	// ttft 保存最近请求的首字延迟采样，供「日志」页展示。
+	// 受 config.Server.LogCapture 开关控制。
+	ttft *ttftBuffer
 }
 
 // New 构造网关。
 func New(store *config.Store) *Server {
-	s := &Server{store: store, pool: provider.NewPool(), mux: http.NewServeMux(), started: time.Now()}
+	s := &Server{store: store, pool: provider.NewPool(), mux: http.NewServeMux(), started: time.Now(), ttft: newTTFTBuffer()}
 	s.routes()
 	return s
 }
@@ -75,6 +79,10 @@ func (s *Server) routes() {
 	// 模型筛选：保存「对外暴露哪些模型」的勾选结果（见 expose.go）。
 	s.mux.HandleFunc("/api/providers/models/expose", s.withAuth(s.handleProviderExpose))
 	s.mux.HandleFunc("/api/accounts/write", s.withAuth(s.handleAccountWrite))
+	// 日志页：采样查询、总开关、清空
+	s.mux.HandleFunc("/api/logs", s.withAuth(s.handleLogs))
+	s.mux.HandleFunc("/api/logs/toggle", s.withAuth(s.handleLogsToggle))
+	s.mux.HandleFunc("/api/logs/clear", s.withAuth(s.handleLogsClear))
 	s.mux.HandleFunc("/api/accounts/export", s.withAuth(s.handleAccountsExport))
 	s.mux.HandleFunc("/api/accounts/import", s.withAuth(s.handleAccountsImport))
 	s.mux.HandleFunc("/api/effort", s.withAuth(s.handleEffort))
@@ -491,10 +499,23 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 
 			// 记录所有非 2xx 响应（含 4xx），之前只有 401/429/5xx 才记
 			// 首字延迟归因：这一轮到上游拿到响应头用了多久。
-			// hasResp=true 说明延迟主要来自上游，而不是网关内部处理。
+			// 同时写进环形缓冲，供面板「日志」页展示（受开关控制）。
+			upMs := time.Since(tTry).Milliseconds()
+			totalMs := time.Since(tReq).Milliseconds()
 			log.Printf("[TTFT] upstream=%dms attempt=%d acct=%s status=%d total=%dms",
-				time.Since(tTry).Milliseconds(), attempt+1, acct.ID,
-				resp.StatusCode, time.Since(tReq).Milliseconds())
+				upMs, attempt+1, acct.ID, resp.StatusCode, totalMs)
+			if cfg.Server.LogCaptureEnabled() {
+				s.ttft.Add(ttftSample{
+					At:         time.Now().Unix(),
+					Model:      head.Model,
+					Account:    acct.ID,
+					TotalMs:    totalMs,
+					UpstreamMs: upMs,
+					Attempts:   attempt + 1,
+					Status:     resp.StatusCode,
+					OverheadMs: totalMs - upMs,
+				})
+			}
 			if resp.StatusCode >= 400 {
 				log.Printf("[UPSTREAM] %d %s/%s model=%s", resp.StatusCode, sp.ID, acct.ID, step.Model)
 			}

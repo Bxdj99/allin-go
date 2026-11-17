@@ -532,6 +532,36 @@
 </section>
 
 <!-- ==================== 5. 设置 ==================== -->
+<section class="page" id="page-logs">
+  <div class="card">
+    <h2>日志总开关</h2>
+    <div class="dim" style="font-size:12px;margin-bottom:10px">
+      关掉后不再写 <code>gateway.log</code>，也不再采集下面的请求样本。
+      排查问题时打开，平时间关掉可以少占存储、安静些。
+    </div>
+    <div class="btnrow" style="margin-top:0">
+      <button class="btn primary" id="btnLogToggle">开启日志</button>
+      <button class="btn" id="btnLogClear">清空已采集</button>
+      <button class="btn" id="btnLogRefresh">刷新</button>
+      <span class="dim" id="logState" style="font-size:12px"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>首字延迟统计</h2>
+    <div id="logSummary" class="dim">点「刷新」加载</div>
+    <div class="hint" style="margin-top:10px">
+      <b>upstream</b> 是上游返回响应的耗时，<b>overhead</b> 是网关自身开销（总耗时减去上游）。
+      如果 overhead 一直很小而 upstream 很大，说明慢在上游，不是网关。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>最近请求</h2>
+    <div id="logSamples" class="dim">暂无数据</div>
+  </div>
+</section>
+
 <section class="page" id="page-settings">
   <div class="card">
     <h2>版本与更新</h2>
@@ -630,6 +660,7 @@
   <button class="tab" data-tab="providers"><svg class="ico" viewBox="0 0 24 24"><path d="M4 8.5 12 4l8 4.5-8 4.5-8-4.5Z"/><path d="M4 12.5 12 17l8-4.5"/><path d="M4 16.5 12 21l8-4.5"/></svg>供应商</button>
   <button class="tab" data-tab="accounts"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c1.6-4 4.2-6 7.5-6s5.9 2 7.5 6"/></svg>账号</button>
   <button class="tab" data-tab="usage"><svg class="ico" viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H3"/></svg>用量</button>
+  <button class="tab" data-tab="logs"><svg class="ico" viewBox="0 0 24 24"><path d="M4 5h16"/><path d="M4 10h10"/><path d="M4 15h13"/><path d="M4 20h7"/></svg>日志</button>
   <button class="tab" data-tab="settings"><svg class="ico" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="17" r="2"/></svg>设置</button>
 </nav>
 
@@ -848,6 +879,7 @@ const LOADERS = {
   providers: loadProviders,
   accounts: loadAccountsTab,
   usage: loadUsage,
+  logs: loadLogs,
   settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); await checkUpdate(); },
 };
 
@@ -2374,6 +2406,141 @@ function refreshIoScope() {
     list.map((id) => '<option value="' + esc(id) + '">' + esc(id) + '</option>').join('');
   if (keep && list.indexOf(keep) >= 0) sel.value = keep;
 }
+
+/* ===================== 日志页 ===================== */
+
+let _logsEnabled = true;
+
+function fmtMs(v) {
+  if (v == null) return '-';
+  if (v >= 1000) return (v / 1000).toFixed(2) + 's';
+  return v + 'ms';
+}
+
+function msClass(v) {
+  // 超过 3 秒标红，1 秒以上标黄，让慢请求一眼能看出来
+  if (v > 3000) return 'err';
+  if (v > 1000) return 'warn';
+  return 'ok';
+}
+
+async function loadLogs() {
+  try {
+    const d = await api('/api/logs?limit=100');
+    _logsEnabled = !!d.enabled;
+    renderLogToggle();
+    renderLogSummary(d.summary || {});
+    renderLogSamples((d.summary && d.summary.samples) || []);
+  } catch (e) {
+    el('logSummary').innerHTML = '<span class="err">加载失败：' + esc(e.message) + '</span>';
+  }
+}
+
+function renderLogToggle() {
+  const b = el('btnLogToggle');
+  if (_logsEnabled) {
+    b.textContent = '关闭日志';
+    b.className = 'btn';
+    el('logState').innerHTML = '<span style="color:#22c55e">● 正在记录</span>';
+  } else {
+    b.textContent = '开启日志';
+    b.className = 'btn primary';
+    el('logState').innerHTML = '<span class="dim">○ 已关闭（不写日志、不采样）</span>';
+  }
+}
+
+function renderLogSummary(s) {
+  if (!s.count) {
+    el('logSummary').innerHTML = '<span class="dim">还没有采样。' +
+      (_logsEnabled ? '发一次请求后点「刷新」。' : '日志开关是关着的，先点「开启日志」。') + '</span>';
+    return;
+  }
+  const cells = [
+    ['样本数', s.count, ''],
+    ['平均', fmtMs(s.avgMs), msClass(s.avgMs)],
+    ['P50', fmtMs(s.p50Ms), msClass(s.p50Ms)],
+    ['P90', fmtMs(s.p90Ms), msClass(s.p90Ms)],
+    ['最慢', fmtMs(s.maxMs), msClass(s.maxMs)],
+    ['平均上游', fmtMs(s.avgUpstreamMs), ''],
+    ['平均网关开销', fmtMs(s.avgOverheadMs), msClass(s.avgOverheadMs)],
+    ['换号次数', s.retried, s.retried ? 'warn' : ''],
+    ['超 3s 次数', s.slowCount, s.slowCount ? 'err' : ''],
+  ];
+  el('logSummary').innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px">' +
+    cells.map(c => '<div style="padding:10px;border-radius:8px;background:rgba(127,127,127,.10)">' +
+      '<div class="dim" style="font-size:11px">' + c[0] + '</div>' +
+      '<div class="' + c[2] + '" style="font-size:17px;font-weight:600;margin-top:2px">' + c[1] + '</div></div>').join('') +
+    '</div>';
+}
+
+function renderLogSamples(list) {
+  if (!list.length) {
+    el('logSamples').innerHTML = '<span class="dim">暂无数据</span>';
+    return;
+  }
+  // 倒序：最新的在最上面
+  const rows = list.slice().reverse().map(s => {
+    const t = new Date(s.at * 1000);
+    const hh = String(t.getHours()).padStart(2, '0');
+    const mm = String(t.getMinutes()).padStart(2, '0');
+    const ss = String(t.getSeconds()).padStart(2, '0');
+    const retry = s.attempts > 1 ? '<span class="warn">换号×' + s.attempts + '</span>' : '';
+    const st = s.status >= 400 ? '<span class="err">' + s.status + '</span>' : s.status;
+    return '<tr>' +
+      '<td>' + hh + ':' + mm + ':' + ss + '</td>' +
+      '<td>' + esc(s.model || '-') + '</td>' +
+      '<td style="font-size:11px">' + esc(s.account || '-') + '</td>' +
+      '<td class="' + msClass(s.totalMs) + '">' + fmtMs(s.totalMs) + '</td>' +
+      '<td>' + fmtMs(s.upstreamMs) + '</td>' +
+      '<td class="' + msClass(s.overheadMs) + '">' + fmtMs(s.overheadMs) + '</td>' +
+      '<td>' + st + '</td>' +
+      '<td>' + retry + '</td>' +
+      '</tr>';
+  }).join('');
+  el('logSamples').innerHTML =
+    '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">' +
+    '<thead><tr style="text-align:left;color:inherit;opacity:.6">' +
+    '<th>时间</th><th>模型</th><th>账号</th><th>总耗时</th><th>上游</th><th>网关开销</th><th>状态</th><th>重试</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+
+on('btnLogToggle', 'click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const r = await api('/api/logs/toggle', { method: 'POST', body: { enabled: !_logsEnabled } });
+    _logsEnabled = !!r.enabled;
+    renderLogToggle();
+    toast(_logsEnabled ? '日志已开启' : '日志已关闭', 'ok');
+    if (!_logsEnabled) {
+      el('logSummary').innerHTML = '<span class="dim">日志已关闭，采样已清空</span>';
+      el('logSamples').innerHTML = '<span class="dim">暂无数据</span>';
+    } else {
+      await loadLogs();
+    }
+  } catch (err) {
+    toast('切换失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+on('btnLogClear', 'click', async (e) => {
+  if (!confirm('清空已采集的日志样本？（不影响 gateway.log 文件）')) return;
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    await api('/api/logs/clear', { method: 'POST' });
+    toast('已清空', 'ok');
+    await loadLogs();
+  } catch (err) {
+    toast('清空失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+on('btnLogRefresh', 'click', loadLogs);
 
 on('btnAccountSave', 'click', async (e) => {
   const btn = e.currentTarget;
