@@ -24,13 +24,22 @@ import (
 //     孤立的 tool 消息上游会拒（400 tool_call_id 找不到）
 
 const (
-	// maxPromptTokens 是上游硬上限（1048576），留 5% 余量给工具 schema 与我们的注入。
-	maxPromptTokens = 980_000
+	// maxPromptTokens 是裁剪阈值，不是上游硬上限。
+	// 上游报的上限是 1048576，但那只是「prompt token」的名义值。
+	// 实测 1167 条消息 + 183 个工具（约 126 万字符）会被上游 400 拒掉，
+	// 因为工具 schema 在 token 化后的开销远大于字符数。
+	// 这里保守降到 600k，宁可多裁也不让请求被拒。
+	maxPromptTokens = 600_000
 	// minKeepMessages 是无论怎么裁都要保留的最近消息条数。
 	minKeepMessages = 20
-	// charsPerToken 是粗略换算；中文约 1.5 字/token，英文约 4 字符/token，
-	// 混排取 3 比较稳（宁可多裁一点也不要被上游拒）。
-	charsPerToken = 3
+	// charsPerToken 是粗略换算；中文约 1.5 字/token，英文约 4 字符/token。
+	// 原来取 3，实测会低估：agent 场景里大量是 JSON、工具调用等低信息密度文本，
+	// 真实 token 数明显高于 char/3。取 2 更接近实际，且偏保守。
+	charsPerToken = 2
+	// toolsCharsPerToken 是工具 schema 的换算系数。
+	// 工具描述里每个参数名、类型、enum 都要单独成 token，比普通文本更密，
+	// 用更小的分母换算，等于给工具更高权重。
+	toolsCharsPerToken = 1
 )
 
 // TrimResult 是裁剪结果。
@@ -56,15 +65,16 @@ func TrimContext(body []byte) (*TrimResult, error) {
 		return &TrimResult{Body: body}, nil
 	}
 
-	// 估算整体 token（含 tools，因为 tools 也占上下文）
-	totalChars := 0
+	// 估算整体 token：消息与工具分开算，工具用更小的分母（权重更高）
+	msgChars := 0
 	for _, msg := range msgs {
-		totalChars += len(msg)
+		msgChars += len(msg)
 	}
+	toolsChars := 0
 	if t, ok := m["tools"]; ok {
-		totalChars += len(t)
+		toolsChars = len(t)
 	}
-	est := totalChars / charsPerToken
+	est := msgChars/charsPerToken + toolsChars/toolsCharsPerToken
 	if est <= maxPromptTokens {
 		return &TrimResult{Body: body, Estimated: est}, nil
 	}
@@ -88,12 +98,10 @@ func TrimContext(body []byte) (*TrimResult, error) {
 	for _, s := range systems {
 		sysChars += len(s)
 	}
-	toolsChars := 0
-	if t, ok := m["tools"]; ok {
-		toolsChars = len(t)
-	}
+	// toolsChars 在上面整体估算时已取过，这里复用
 	budgetChars := (maxPromptTokens - 50_000) * charsPerToken // 再留 5万 token 给输出
-	availChars := budgetChars - sysChars - toolsChars
+	// 工具按更高权重折算成等效字符数，从预算里扣掉
+	availChars := budgetChars - sysChars - toolsChars*charsPerToken/toolsCharsPerToken
 
 	// 从尾部往前累加，能放下多少就保留多少
 	var kept []json.RawMessage
@@ -132,7 +140,7 @@ func TrimContext(body []byte) (*TrimResult, error) {
 		return nil, err
 	}
 
-	est2 := (sysChars + acc + toolsChars) / charsPerToken
+	est2 := (sysChars+acc)/charsPerToken + toolsChars/toolsCharsPerToken
 	return &TrimResult{
 		Body:      nb,
 		Dropped:   len(rest) - len(kept),
