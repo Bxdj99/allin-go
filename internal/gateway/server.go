@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"bufio"
 	"encoding/json"
@@ -518,6 +519,18 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 			}
 			if resp.StatusCode >= 400 {
 				log.Printf("[UPSTREAM] %d %s/%s model=%s", resp.StatusCode, sp.ID, acct.ID, step.Model)
+				// 渠道校验失败是「请求来源不被认可」的硬拒绝，换号/换模型都不会成功。
+				// 不在这里拦住的话会白跑满 3 次换号 + 整条降级链，用户干等十几秒
+				// 却只看到一句「本机出错」。
+				if sniff, _ := io.ReadAll(io.LimitReader(resp.Body, 8192)); fallback.IsChannelBlocked(string(sniff)) {
+					resp.Body.Close()
+					log.Printf("渠道校验失败（code 11128），不做换号重试: %s/%s", sp.ID, acct.ID)
+					s.fail(w, http.StatusBadRequest, fallback.ChannelBlockedHint())
+					return
+				} else {
+					// 读出来的内容要还原回去，否则下面 relay 拿到的是空 body
+					resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(sniff), resp.Body))
+				}
 			}
 			if resp.StatusCode == 401 || resp.StatusCode == 429 || resp.StatusCode >= 500 {
 				raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))

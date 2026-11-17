@@ -32,6 +32,9 @@ const (
 	maxPromptTokens = 600_000
 	// minKeepMessages 是无论怎么裁都要保留的最近消息条数。
 	minKeepMessages = 20
+	// maxAnchorMessages 是开头锚点最多保留几条用户消息。
+	// 太少记不住任务目标，太多会挤掉近期上下文。
+	maxAnchorMessages = 6
 	// charsPerToken 是粗略换算；中文约 1.5 字/token，英文约 4 字符/token。
 	// 原来取 3，实测会低估：agent 场景里大量是 JSON、工具调用等低信息密度文本，
 	// 真实 token 数明显高于 char/3。取 2 更接近实际，且偏保守。
@@ -103,17 +106,63 @@ func TrimContext(body []byte) (*TrimResult, error) {
 	// 工具按更高权重折算成等效字符数，从预算里扣掉
 	availChars := budgetChars - sysChars - toolsChars*charsPerToken/toolsCharsPerToken
 
-	// 从尾部往前累加，能放下多少就保留多少
+	// 先取「开头锚点」：最早的若干条用户消息。
+	//
+	// 为什么要有这个：只保留最近 N 条会让模型「变笨」——用户一开始交代的
+	// 目标、路径、约束全在被丢掉的部分里，模型只看得到最近几轮，
+	// 表现就是记不住前面说过什么。保留开头能把这个锚留住。
+	var anchors []json.RawMessage
+	anchorChars := 0
+	anchorBudget := availChars / 5 // 最多 1/5 预算给开头，不能挤掉近期上下文
+	for _, msg := range rest {
+		if len(anchors) >= maxAnchorMessages || anchorChars+len(msg) > anchorBudget {
+			break
+		}
+		var head struct {
+			Role string `json:"role"`
+		}
+		_ = json.Unmarshal(msg, &head)
+		// 锚点只保留用户消息与非空 assistant 文本，跳过工具调用链
+		if head.Role != "user" {
+			continue
+		}
+		anchors = append(anchors, msg)
+		anchorChars += len(msg)
+	}
+
+	// 再从尾部往前累加，能放下多少就保留多少
 	var kept []json.RawMessage
-	acc := 0
+	acc := anchorChars
 	for i := len(rest) - 1; i >= 0; i-- {
 		n := len(rest[i])
+		// 已被锚点选中的消息不重复放
+		if i < len(anchors) {
+			break
+		}
 		if acc+n > availChars && len(kept) >= minKeepMessages {
 			break
 		}
 		kept = append([]json.RawMessage{rest[i]}, kept...)
 		acc += n
 	}
+
+	// 锚点与近期窗口之间若确有消息被丢掉，插一条提示，
+	// 让模型知道中间有缺失，而不是以为上下文是连续的。
+	droppedBetween := len(rest) - len(anchors) - len(kept)
+	var bridge []json.RawMessage
+	if droppedBetween > 0 && len(anchors) > 0 && len(kept) > 0 {
+		note := map[string]any{
+			"role": "user",
+			"content": fmt.Sprintf("[网关提示] 为节省上下文，中间的 %d 条历史已省略。"+
+				"如需依据更早的细节，请重新说明。", droppedBetween),
+		}
+		if nb, err := json.Marshal(note); err == nil {
+			bridge = append(bridge, nb)
+		}
+	}
+
+	// 合并顺序：开头锚点 → 省略提示 → 最近窗口
+	kept = append(append(append([]json.RawMessage{}, anchors...), bridge...), kept...)
 
 	// 修掉被裁断的 tool 关系：
 	// 如果保留的第一条是 tool 消息，说明它的 assistant tool_calls 被裁掉了，

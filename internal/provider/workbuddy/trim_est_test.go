@@ -58,3 +58,36 @@ func TestEstimateKeepsSmallRequest(t *testing.T) {
 		t.Fatal("小请求不应被裁剪")
 	}
 }
+
+// 「变笨」回归：裁剪后必须保留开头交代的任务目标。
+// 之前只留最近 20 条，用户一开始说的路径/要求全被丢掉，模型就记不住了。
+func TestTrimKeepsOpeningAnchor(t *testing.T) {
+	msgs := []map[string]any{
+		{"role": "system", "content": "你是助手"},
+		{"role": "user", "content": "重要目标：把项目改到 /workspace/allin-go，不要动其他目录"},
+		{"role": "assistant", "content": "好的"},
+	}
+	// 中间塞大量内容把它挤出最近窗口
+	big := strings.Repeat("z", 1200)
+	for i := 0; i < 1200; i++ {
+		msgs = append(msgs, map[string]any{"role": "user", "content": big})
+	}
+	msgs = append(msgs, map[string]any{"role": "user", "content": "继续"})
+
+	body, _ := json.Marshal(map[string]any{"model": "m", "messages": msgs})
+	res, err := TrimContext(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Trimmed {
+		t.Fatal("应触发裁剪")
+	}
+	// 裁剪后的 body 里必须还能找到那条关键目标
+	if !strings.Contains(string(res.Body), "把项目改到 /workspace/allin-go") {
+		t.Fatal("开头交代的任务目标被裁掉了 —— 模型会「变笨」")
+	}
+	// 并且要有省略提示
+	if !strings.Contains(string(res.Body), "已省略") {
+		t.Error("应插入省略提示，让模型知道上下文不连续")
+	}
+}

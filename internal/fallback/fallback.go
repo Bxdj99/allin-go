@@ -89,3 +89,28 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// IsChannelBlocked 判断是不是「渠道校验失败」这一类硬拒绝。
+//
+// WorkBuddy 对非官方客户端会返回：
+//
+//	400 {"code":11128,"msg":"Illegal API invocation from an unapproved channel",
+//	     "retry_policy":{"retry":false}, ...}
+//
+// 这类错误换号、换模型、重试都不会成功 —— 是请求来源被判定为非官方客户端。
+// 必须直接失败并把原因透传给用户，否则会白白跑满 3 次换号 + 整条模型降级链，
+// 用户只看到「本机出错」却等很久。
+func IsChannelBlocked(body string) bool {
+	return contains(body, `"code":11128`) ||
+		contains(body, "unapproved channel") ||
+		contains(body, "channel verification")
+}
+
+// ChannelBlockedHint 是给用户看的说明。
+// 说清「发生了什么、为什么换账号没用、能做什么」，而不是丢一句上游原文。
+func ChannelBlockedHint() string {
+	return "上游拒绝了这次请求：渠道校验未通过（code 11128）。" +
+		"这是请求来源被判定为非官方客户端，换账号或换模型都不会成功，" +
+		"所以网关没有重试。常见原因：该账号的上游客户端指纹与请求特征不匹配、" +
+		"或该账号被上游风控。建议换一个账号，或改用其它供应商。"
+}
