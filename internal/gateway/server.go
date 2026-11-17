@@ -340,6 +340,11 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		log.Printf("[MODEL] client=%q realModel=%q upstreamModel=%q", head.Model, realModel, chk.Model)
 	}
 
+	// preTrimBody 保存裁剪前的请求体，供「上游嫌大 → 换更小预算重裁」时使用。
+	var preTrimBody []byte
+	trimRounds := 0
+	trimBudget := 0
+
 	// WorkBuddy 需要请求体适配：工具名规范化、tool_choice 归一化、补 reasoning_effort
 	if kind == provider.KindWorkBuddy {
 		effort := resolveEffort(cfg, effortSuffix, reqFields)
@@ -351,10 +356,14 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		} else {
 			log.Printf("WorkBuddy 请求预处理失败（按原样发送）: %v", perr)
 		}
-		// 上下文裁剪：上游硬上限 1,048,576 tokens，超了直接 400。
-		// Agent 会话（几千条消息 + 上百个工具）很容易撞墙，这里主动裁。
-		if tr, terr := workbuddy.TrimContext(upstreamBody); terr == nil && tr.Trimmed {
-			log.Printf("上下文裁剪：丢弃 %d 条历史，估算 %d tokens", tr.Dropped, tr.Estimated)
+		// 上下文裁剪：先按默认阈值裁一次。
+		// 若上游仍嫌大（见下面的续写逻辑），会用更小预算重裁。
+		// 保留裁剪前快照，续写时从它出发，避免在已裁过的产物上二次裁导致越裁越碎。
+		preTrimBody = upstreamBody
+		if tr, terr := workbuddy.TrimContext(upstreamBody); terr == nil {
+			if tr.Trimmed {
+				log.Printf("上下文裁剪：丢弃 %d 条历史，估算 %d tokens", tr.Dropped, tr.Estimated)
+			}
 			upstreamBody = tr.Body
 		}
 		// WorkBuddy 只接受流式：上游一律 stream:true，客户端要非流式时本地聚合
@@ -440,16 +449,18 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		}
 
 		// 换模型时要重新改写请求体（model 名不同）
+		//
+		// 注意：必须在「已裁剪」的 upstreamBody 上改，不能用原始 body。
+		// 用原始 body 会把上面的裁剪全部丢掉，等于把 4MB 原样重发，
+		// 而且 Prepare 会在已裁产物上再跑一遍，工具名映射可能对不上，
+		// 上游就会报 11148「tool calls and tool results do not match」。
 		stepBody := upstreamBody
 		if step.Model != realModel {
-			if nb, rerr := rewriteModel(body, step.Model); rerr == nil {
+			if nb, rerr := rewriteModel(upstreamBody, step.Model); rerr == nil {
 				stepBody = nb
-				// 重跑一次供应商侧的预处理（工具名规范化等）
+				// Prepare 已在上面做过（工具名规范化等），这里只补与模型相关的那步。
+				// 重复 Prepare 会让工具名二次映射，破坏 tool_calls 与 tool 结果的对应。
 				if kind == provider.KindWorkBuddy {
-					eff := resolveEffort(cfg, effortSuffix, reqFields)
-					if nb2, e2 := workbuddy.Prepare(stepBody, eff); e2 == nil {
-						stepBody = nb2
-					}
 					if nb3, e3 := workbuddy.ForceStream(stepBody); e3 == nil {
 						stepBody = nb3
 					}
@@ -537,6 +548,33 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 					log.Printf("渠道校验失败（code 11128），不做换号重试: %s/%s", sp.ID, acct.ID)
 					s.fail(w, http.StatusBadRequest, fallback.ChannelBlockedHint())
 					return
+				}
+				// 上游嫌请求太大（含 tool 配对断裂）：换更小预算重裁再发。
+				// 不限制图片、不无脑截断，只在真被拒时才逐级收紧。
+				if kind == provider.KindWorkBuddy && fallback.IsContextTooLarge(string(sniff)) &&
+					trimRounds < maxTrimRounds && len(preTrimBody) > 0 {
+					resp.Body.Close()
+					next := trimBudget
+					if next == 0 {
+						next = workbuddy.DefaultPromptBudget()
+					}
+					next = next * 2 / 3 // 每轮砍掉 1/3
+					if next < minTrimBudget {
+						next = minTrimBudget
+					}
+					trimBudget = next
+					trimRounds++
+					tr, terr := workbuddy.TrimContextTo(preTrimBody, trimBudget)
+					if terr != nil {
+						lastErrMsg = "重新裁剪失败: " + terr.Error()
+						continue
+					}
+					stepBody = tr.Body
+					log.Printf("上游嫌请求过大，第 %d 轮重裁：预算 %d tokens，建议 %d tokens",
+						trimRounds, trimBudget, tr.Estimated)
+					// 用同一账号、同一个 attempt 重发，不消耗换号次数
+					attempt--
+					continue
 				}
 				// 读出来的内容要还原回去，否则下面 relay 拿到的是空 body
 				resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(sniff), resp.Body))
@@ -1050,3 +1088,13 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// 渐进式裁剪参数。
+//
+// 设计目标：不要一上来就把图片、长文本砍掉。
+// 第一次按默认阈值裁，只有上游真的嫌大才逐轮收紧，
+// 每轮砍掉当前预算的 1/3，最多几轮。
+const (
+	maxTrimRounds = 4
+	minTrimBudget = 120_000
+)

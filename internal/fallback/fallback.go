@@ -114,3 +114,42 @@ func ChannelBlockedHint() string {
 		"所以网关没有重试。常见原因：该账号的上游客户端指纹与请求特征不匹配、" +
 		"或该账号被上游风控。建议换一个账号，或改用其它供应商。"
 }
+
+// IsContextTooLarge 判断上游拒绝是不是因为「请求太大」。
+//
+// 上游对此的措辞不统一，常见几类：
+//   - 11148 tool calls and tool results do not match（裁剪切断配对）
+//   - prompt is too long / context length exceeded / too many tokens
+//   - 11128 unapproved channel 之外的其它 code 111xx 通常也和请求体有关
+//
+// 命中后应换更小的预算重新裁剪再发，而不是直接失败。
+func IsContextTooLarge(body string) bool {
+	low := toLower(body)
+	for _, kw := range []string{
+		"tool calls and tool results do not match",
+		"tool_call_id",
+		"prompt is too long",
+		"context length",
+		"context_length_exceeded",
+		"maximum context",
+		"too many tokens",
+		"request too large",
+		"payload too large",
+		`"code":11148`,
+	} {
+		if contains(low, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func toLower(s string) string {
+	b := []byte(s)
+	for i := 0; i < len(b); i++ {
+		if b[i] >= 'A' && b[i] <= 'Z' {
+			b[i] += 'a' - 'A'
+		}
+	}
+	return string(b)
+}
