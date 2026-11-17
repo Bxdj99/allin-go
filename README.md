@@ -18,6 +18,7 @@
 
 - **双协议入口**：`/v1/chat/completions`（OpenAI）、`/v1/messages`（Anthropic），两边可自动互转（含 `tools` / `tool_use` / `tool_result`）
 - **账号池**：least-used 轮转、失败换号重试、分级冷却（401 / 429 / 5xx 各不同）
+- **积分感知选号**：多账号按负载轮转，同一负载下优先派给**额度先到期**的号，避免积分过期作废（WorkBuddy，积分快照 10 分钟刷新一次；`/api/accounts` 可看每号余额与到期时间）
 - **路由组**：`group/<id>` 按顺序挑目标
 - **WorkBuddy 完整反代**：上游只吃流式 → 本地聚合给非流式客户端；工具名规范化、`tool_choice` 归一化、`reasoning_effort` 补齐
 - **每日签到**：WorkBuddy 多账号 `daily-checkin`，09/21 点自动
@@ -117,7 +118,7 @@ internal/gateway/          HTTP 路由、鉴权、转发、各家 relay 分支
 internal/bridge/           Anthropic ↔ OpenAI 协议互转
 internal/provider/         供应商适配器
   ├── provider.go          统一请求构造 + 模型解析
-  ├── pool.go              账号池（轮转 / 冷却）
+  ├── pool.go              账号池（轮转 / 冷却 / 积分感知选号）
   └── <vendor>/            各家协议实现
 internal/netfix/           Android DNS 兜底
 ```
