@@ -162,17 +162,34 @@ func normalizeToolChoice(body map[string]json.RawMessage, renames map[string]str
 	// 字符串形态
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
-		switch strings.ToLower(strings.TrimSpace(s)) {
+		v := strings.ToLower(strings.TrimSpace(s))
+		switch v {
 		case "none":
 			delete(body, "tool_choice")
 			delete(body, "tools")
 			delete(body, "functions")
+		case "auto", "required":
+			// 这两个是 OpenAI 的标准值，必须原样保留。
+			// 之前因为没有单独的 case，"auto" 会落到 default 被当成
+			// 「未知字符串」删掉 —— 后果是模型失去「可调用工具」的提示，
+			// 表现就是该用工具时不用，用户感觉「变笨了」。
+			buf, _ := json.Marshal(v)
+			body["tool_choice"] = buf
 		default:
+			// 剩下的可能是工具名（强制调用某个函数）或上游不认识的值
 			if mapped, ok := renames[s]; ok {
 				buf, _ := json.Marshal(mapped)
 				body["tool_choice"] = buf
+			} else if validName.MatchString(s) {
+				// 合法工具名：转成 function 形态，保留「强制调用」语义
+				obj := map[string]any{
+					"type":     "function",
+					"function": map[string]any{"name": s},
+				}
+				buf, _ := json.Marshal(obj)
+				body["tool_choice"] = buf
 			} else {
-				delete(body, "tool_choice") // 未知字符串上游不认，去掉更安全
+				delete(body, "tool_choice") // 确实不认识，去掉更安全
 			}
 		}
 		return
