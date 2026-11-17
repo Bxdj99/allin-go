@@ -114,10 +114,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/", s.handleIndex)
 }
 
-// Start 启动后台任务（目前是 Token 自动刷新巡检）。
+// Start 启动后台任务（Token 自动刷新巡检、WorkBuddy 积分快照刷新）。
 // ctx 取消时全部退出。
 func (s *Server) Start(ctx context.Context) {
 	s.startTokenRefresher(ctx)
+	s.startCreditsRefresher(ctx)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
