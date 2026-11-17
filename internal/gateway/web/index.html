@@ -385,6 +385,15 @@
       <select id="fPkind"></select>
     </div>
     <div class="field">
+      <label>账号路由策略</label>
+      <select id="fProute">
+        <option value="sticky">会话绑定（推荐）—— 同一段对话固定用一个账号，避免频繁换号触发限流</option>
+        <option value="rotate">轮询 —— 每个请求换一个账号，负载最均匀</option>
+        <option value="balance">用量均衡 —— 优先用完剩余比例最低的账号</option>
+        <option value="expiry">到期优先 —— 优先用完最早过期的额度</option>
+      </select>
+    </div>
+    <div class="field">
       <label>baseUrl（留空用该 kind 默认地址；编辑时留空表示不改）</label>
       <input id="fPbase" placeholder="https://copilot.tencent.com/v1" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url">
     </div>
@@ -2164,6 +2173,7 @@ function editProvider(id) {
   el('fPid').disabled = true;           // id 是主键，不让改
   el('fPname').value = p.name || '';
   el('fPkind').value = p.kind || '';
+  el('fProute').value = p.routeMode || 'sticky';
   el('fPbase').value = p.baseUrl || '';
   el('fPkey').value = '';               // 脱敏值不回填，留空 = 不改
   el('fPkey').placeholder = '留空表示不修改（现有 key 不回显）';
@@ -2180,6 +2190,7 @@ function resetProviderForm() {
   el('fPid').disabled = false;
   el('fPname').value = '';
   el('fPkind').value = '';
+  el('fProute').value = 'sticky';
   el('fPbase').value = '';
   el('fPkey').value = '';
   el('fPkey').placeholder = 'sk-... / 访问令牌';
@@ -2199,6 +2210,7 @@ on('btnProvSave', 'click', async (e) => {
     id: id,
     name: el('fPname').value.trim(),
     kind: el('fPkind').value,
+    routeMode: el('fProute').value,
     baseUrl: el('fPbase').value.trim(),
     apiKey: el('fPkey').value.trim(),
     models: models,

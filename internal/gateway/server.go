@@ -465,9 +465,11 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		}
 
 		tried := map[string]bool{}
+		// 会话绑定：同一段对话钉在同一账号，避免每轮换号触发上游限流
+		sessKey := provider.SessionKey(sp.ID, sessionFingerprint(body))
 		modelExhausted := false
 		for attempt := 0; attempt < maxAccountAttempts; attempt++ {
-			acct := s.pool.Pick(sp, tried)
+			acct := s.pool.PickForSession(sp, tried, sessKey)
 			if acct == nil {
 				modelExhausted = true
 				break
@@ -493,6 +495,8 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 			if err != nil {
 				uc.fail(sp.ID, step.Model)
 				s.pool.Fail(sp.ID, acct.ID, 0, err.Error())
+				// 绑定的账号不可用了，解绑让下一轮重新选
+				s.pool.UnbindSession(sessKey)
 				lastErrMsg = err.Error()
 				log.Printf("上游请求失败 %s/%s: %v", sp.ID, acct.ID, err)
 				continue
@@ -522,15 +526,20 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				// 渠道校验失败是「请求来源不被认可」的硬拒绝，换号/换模型都不会成功。
 				// 不在这里拦住的话会白跑满 3 次换号 + 整条降级链，用户干等十几秒
 				// 却只看到一句「本机出错」。
-				if sniff, _ := io.ReadAll(io.LimitReader(resp.Body, 8192)); fallback.IsChannelBlocked(string(sniff)) {
+				sniff, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+				// 4xx 的响应体一定要留证：上游常说「参数无效」但不告诉你是哪个参数，
+				// 没有原文根本没法排查。
+				if resp.StatusCode >= 400 {
+					log.Printf("[UPSTREAM-BODY] %d %s: %s", resp.StatusCode, acct.ID, truncate(string(sniff), 600))
+				}
+				if fallback.IsChannelBlocked(string(sniff)) {
 					resp.Body.Close()
 					log.Printf("渠道校验失败（code 11128），不做换号重试: %s/%s", sp.ID, acct.ID)
 					s.fail(w, http.StatusBadRequest, fallback.ChannelBlockedHint())
 					return
-				} else {
-					// 读出来的内容要还原回去，否则下面 relay 拿到的是空 body
-					resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(sniff), resp.Body))
 				}
+				// 读出来的内容要还原回去，否则下面 relay 拿到的是空 body
+				resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(sniff), resp.Body))
 			}
 			if resp.StatusCode == 401 || resp.StatusCode == 429 || resp.StatusCode >= 500 {
 				raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -538,6 +547,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				bodyText := string(raw)
 				uc.fail(sp.ID, step.Model)
 				s.pool.Fail(sp.ID, acct.ID, resp.StatusCode, truncate(bodyText, 160))
+				s.pool.UnbindSession(sessKey)
 				lastErrMsg = truncate(bodyText, 200)
 				log.Printf("上游 %d，换号: %s/%s", resp.StatusCode, sp.ID, acct.ID)
 				// 额度类错误 → 整个模型都别试了，直接进下一个模型

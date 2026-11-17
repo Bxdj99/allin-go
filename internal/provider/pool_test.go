@@ -23,6 +23,7 @@ const pid = "workbuddy"
 func TestPickNoCreditsFallsBackToLeastUsed(t *testing.T) {
 	p := NewPool()
 	pr := prov(pid, acct("a"), acct("b"))
+	pr.RouteMode = config.RouteRotate // 无绑定轮转语义
 
 	seen := map[string]int{}
 	for i := 0; i < 4; i++ {
@@ -96,6 +97,7 @@ func TestPickRespectsCreditsFloor(t *testing.T) {
 func TestPickPrefersSoonerResetOnTie(t *testing.T) {
 	p := NewPool()
 	pr := prov(pid, acct("later"), acct("soon"))
+	pr.RouteMode = config.RouteExpiry
 
 	p.SetCredits(pid, "later", 100, time.Now().Add(20*24*time.Hour))
 	p.SetCredits(pid, "soon", 5, time.Now().Add(24*time.Hour))
@@ -112,6 +114,7 @@ func TestPickPrefersSoonerResetOnTie(t *testing.T) {
 func TestPickRotatesInsteadOfMonopolizing(t *testing.T) {
 	p := NewPool()
 	pr := prov(pid, acct("urgent"), acct("normal"))
+	pr.RouteMode = config.RouteRotate
 
 	// urgent 余额最多且最早到期，按旧逻辑会一直被选中
 	p.SetCredits(pid, "urgent", 1000, time.Now().Add(24*time.Hour))
@@ -145,6 +148,8 @@ func TestPickUnknownResetRanksLast(t *testing.T) {
 
 	// 两个号成功次数都是 0，是平局，此时到期已知的应胜出。
 	// 只验一轮：多发几次会因 least-used 轮转而选中另一个，那是预期行为。
+	// 用 expiry 策略验证「到期已知优先」，sticky 下会按负载选号
+	pr.RouteMode = config.RouteExpiry
 	if a := p.Pick(pr, nil); a.ID != "known" {
 		t.Fatalf("负载相同时到期已知的应优先，实际选了 %s", a.ID)
 	}

@@ -469,7 +469,9 @@ type providerPayload struct {
 	Enabled *bool    `json:"enabled"`
 	// AutoSyncModels 仅用指针区分「没传」（保持原值）与「显式设为 false」。
 	AutoSyncModels *bool `json:"autoSyncModels"`
-	Delete         bool  `json:"delete"`
+	// RouteMode 是账号路由策略：sticky / rotate / balance / expiry。
+	RouteMode string `json:"routeMode"`
+	Delete    bool   `json:"delete"`
 }
 
 // handleProviderWrite 新增、更新或删除一个供应商。
@@ -540,6 +542,17 @@ func (s *Server) handleProviderWrite(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Kind != "" {
 		p.Kind = in.Kind
+	}
+	if in.RouteMode != "" {
+		switch in.RouteMode {
+		case config.RouteSticky, config.RouteRotate, config.RouteBalance, config.RouteExpiry:
+			p.RouteMode = in.RouteMode
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"ok": false, "error": "routeMode 只能是 sticky / rotate / balance / expiry",
+			})
+			return
+		}
 	}
 	if in.BaseURL != "" {
 		p.BaseURL = in.BaseURL

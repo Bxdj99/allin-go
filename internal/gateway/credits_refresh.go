@@ -98,7 +98,7 @@ func (s *Server) refreshCredits(parent context.Context) {
 			if t, ok := parseCreditTime(sum.ResetAt); ok {
 				resetAt = t
 			}
-			s.pool.SetCredits(j.providerID, j.accountID, sum.Remaining, resetAt)
+			s.pool.SetCreditsFull(j.providerID, j.accountID, sum.Remaining, sum.Total, resetAt)
 		}(j)
 	}
 	wg.Wait()

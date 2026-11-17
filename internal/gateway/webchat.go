@@ -72,8 +72,9 @@ func (s *Server) forwardWebChat(w http.ResponseWriter, r *http.Request, p *confi
 		return
 	}
 
+	sessKey := provider.SessionKey(p.ID, sessionFingerprint(body))
 	for attempt := 0; attempt < maxAccountAttempts; attempt++ {
-		acct := s.pool.Pick(p, tried)
+		acct := s.pool.PickForSession(p, tried, sessKey)
 		if acct == nil {
 			uc.fail(p.ID, realModel)
 			if attempt == 0 {

@@ -409,9 +409,10 @@ func (s *Server) forwardDeepSeek(w http.ResponseWriter, r *http.Request, p *conf
 	conv := dsConvoKey(body)
 
 	tried := map[string]bool{}
+	sessKey := provider.SessionKey(p.ID, sessionFingerprint(body))
 	var lastErr error
 	for attempt := 0; attempt < maxAccountAttempts; attempt++ {
-		acct := s.pool.Pick(p, tried)
+		acct := s.pool.PickForSession(p, tried, sessKey)
 		if acct == nil {
 			if attempt == 0 {
 				uc.fail(p.ID, realModel)

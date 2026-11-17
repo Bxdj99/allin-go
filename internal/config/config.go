@@ -114,6 +114,29 @@ type Provider struct {
 	Headers map[string]string `json:"headers,omitempty"`
 	// HeaderPrefix 供特殊供应商在运行时用账号信息拼头。
 	Notes string `json:"notes,omitempty"`
+
+	// RouteMode 是账号路由策略：
+	//   ""/"sticky"  会话绑定（默认）：同一窗口钉在一个账号上，避免频繁换号触发风控
+	//   "rotate"     轮询：每个请求换一个账号
+	//   "balance"    用量均衡：优先用完额度比例最低的账号
+	//   "expiry"     到期优先：优先用完最早过期的额度
+	RouteMode string `json:"routeMode,omitempty"`
+}
+
+// 路由策略常量。
+const (
+	RouteSticky  = "sticky"
+	RouteRotate  = "rotate"
+	RouteBalance = "balance"
+	RouteExpiry  = "expiry"
+)
+
+// RouteModeOrDefault 返回规范化后的路由策略。
+func (p *Provider) RouteModeOrDefault() string {
+	if p == nil || p.RouteMode == "" {
+		return RouteSticky
+	}
+	return p.RouteMode
 }
 
 // IsEnabled 默认启用。
