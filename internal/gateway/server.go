@@ -84,6 +84,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/logs", s.withAuth(s.handleLogs))
 	s.mux.HandleFunc("/api/logs/toggle", s.withAuth(s.handleLogsToggle))
 	s.mux.HandleFunc("/api/logs/clear", s.withAuth(s.handleLogsClear))
+	// 账号级积分统计：谁花了多少，随时可查
+	s.mux.HandleFunc("/api/accounts/usage", s.withAuth(s.handleAccountUsage))
+	s.mux.HandleFunc("/api/accounts/usage/reset", s.withAuth(s.handleAccountUsageReset))
 	s.mux.HandleFunc("/api/accounts/export", s.withAuth(s.handleAccountsExport))
 	s.mux.HandleFunc("/api/accounts/import", s.withAuth(s.handleAccountsImport))
 	s.mux.HandleFunc("/api/effort", s.withAuth(s.handleEffort))
@@ -491,6 +494,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				log.Printf("换号重试: %s/%s（第 %d 次）", sp.ID, acct.ID, attempt+1)
 			}
 			tried[acct.ID] = true
+			uc.accountID = acct.ID // 按账号记积分消耗
 
 			upreq, err := provider.BuildRequest(kind, stepBase, apiPath, acct.Key(), acct, stepBody, sp.Headers)
 			if err != nil {
@@ -543,6 +547,14 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				// 没有原文根本没法排查。
 				if resp.StatusCode >= 400 {
 					log.Printf("[UPSTREAM-BODY] %d %s: %s", resp.StatusCode, acct.ID, truncate(string(sniff), 600))
+				}
+				// 上游明确要求不重试时，直接停下。
+				// 继续换号只会白耗配额，还可能被上游判为异常调用。
+				if fallback.RetryForbidden(string(sniff)) {
+					resp.Body.Close()
+					log.Printf("上游明确 retry:false，停止重试: %s/%s status=%d", sp.ID, acct.ID, resp.StatusCode)
+					s.fail(w, resp.StatusCode, "上游拒绝且不允许重试："+truncate(string(sniff), 300))
+					return
 				}
 				if fallback.IsChannelBlocked(string(sniff)) {
 					resp.Body.Close()

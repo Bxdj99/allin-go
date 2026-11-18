@@ -18,11 +18,15 @@ import (
 	"time"
 )
 
-// usageTokens 是一次响应里的 token 用量。
+// usageTokens 是一次响应里的 token 用量与积分消耗。
 type usageTokens struct {
 	In    int
 	Out   int
 	Total int
+	// Credit 是上游返回的本次消耗积分（WorkBuddy 会带这个字段，如 0.02）。
+	// 用来做「哪个账号花了多少积分」的统计 —— 用户反馈积分莫名消失时，
+	// 这是唯一能自证清白的证据来源。
+	Credit float64
 }
 
 // add 把另一来源并入（同一项取较大值，兼容「部分帧只给增量」的上游）。
@@ -35,6 +39,10 @@ func (u *usageTokens) add(o usageTokens) {
 	}
 	if o.Total > u.Total {
 		u.Total = o.Total
+	}
+	// 积分是累计值，取最大（同一响应里可能多帧重复给）
+	if o.Credit > u.Credit {
+		u.Credit = o.Credit
 	}
 }
 
@@ -57,8 +65,9 @@ func usageFromJSON(raw []byte) usageTokens {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
 			TotalTokens      int `json:"total_tokens"`
-			InputTokens      int `json:"input_tokens"`
-			OutputTokens     int `json:"output_tokens"`
+			InputTokens      int     `json:"input_tokens"`
+			OutputTokens     int     `json:"output_tokens"`
+			Credit           float64 `json:"credit"`
 		} `json:"usage"`
 		// Anthropic 的整条响应：usage 直接在顶层，偶尔也会被包在 message 里
 		Message *struct {
@@ -74,9 +83,10 @@ func usageFromJSON(raw []byte) usageTokens {
 	var u usageTokens
 	if env.Usage != nil {
 		u = usageTokens{
-			In:    firstNonZero(env.Usage.PromptTokens, env.Usage.InputTokens),
-			Out:   firstNonZero(env.Usage.CompletionTokens, env.Usage.OutputTokens),
-			Total: env.Usage.TotalTokens,
+			In:     firstNonZero(env.Usage.PromptTokens, env.Usage.InputTokens),
+			Out:    firstNonZero(env.Usage.CompletionTokens, env.Usage.OutputTokens),
+			Total:  env.Usage.TotalTokens,
+			Credit: env.Usage.Credit,
 		}
 	}
 	if env.Message != nil && env.Message.Usage != nil {
@@ -101,8 +111,9 @@ func usageFromEvent(data []byte) usageTokens {
 			TotalTokens      int `json:"total_tokens"`
 			InputTokens      int `json:"input_tokens"`
 			OutputTokens     int `json:"output_tokens"`
-			CacheRead        int `json:"cache_read_input_tokens"`
-			CacheCreation    int `json:"cache_creation_input_tokens"`
+			CacheRead        int     `json:"cache_read_input_tokens"`
+			CacheCreation    int     `json:"cache_creation_input_tokens"`
+			Credit           float64 `json:"credit"`
 		} `json:"usage"`
 		Message *struct {
 			Usage *struct {
@@ -119,9 +130,10 @@ func usageFromEvent(data []byte) usageTokens {
 	var u usageTokens
 	if env.Usage != nil {
 		u = usageTokens{
-			In:    firstNonZero(env.Usage.PromptTokens, env.Usage.InputTokens),
-			Out:   firstNonZero(env.Usage.CompletionTokens, env.Usage.OutputTokens),
-			Total: env.Usage.TotalTokens,
+			In:     firstNonZero(env.Usage.PromptTokens, env.Usage.InputTokens),
+			Out:    firstNonZero(env.Usage.CompletionTokens, env.Usage.OutputTokens),
+			Total:  env.Usage.TotalTokens,
+			Credit: env.Usage.Credit,
 		}
 		if env.Usage.InputTokens > 0 {
 			// Anthropic 的 input 不含缓存命中/写入部分，按总量补齐更接近计费口径
@@ -262,6 +274,10 @@ type usageCtx struct {
 	defaultModel    string
 	started         time.Time
 	done            bool
+
+	// accountID 是本次实际使用的账号，用于按账号统计积分消耗。
+	// 用户反馈「积分莫名少了」时，只能靠这个数据自证。
+	accountID string
 }
 
 // newUsageCtx 为一条客户端请求建记账上下文。
@@ -303,6 +319,9 @@ func (c *usageCtx) record(usageProvider, usageModel string, ok bool, u usageToke
 		usageModel = c.defaultModel
 	}
 	recordUsageStat(usageProvider, usageModel, ok, u.counts())
+	if c.accountID != "" {
+		recordAccountUsage(usageProvider, c.accountID, ok, u)
+	}
 }
 
 // fail 记一次失败（没有 token）。providerID/model 传空则用默认值；传一个参数时两者都取默认。

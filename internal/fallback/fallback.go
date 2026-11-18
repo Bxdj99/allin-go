@@ -168,3 +168,28 @@ func IsTransientToolReject(body string) bool {
 	return contains(toLower(body), "tool calls and tool results do not match") ||
 		contains(body, `"code":11148`)
 }
+
+// RetryForbidden 判断上游是否明确要求「不要重试」。
+//
+// 上游响应里带 "retry_policy":{"retry":false} 时，说明它对这次请求
+// 已经做了终局判定，重发不会成功。
+//
+// 为什么必须遵守：网关的换号重试会让同一份请求打到多个账号上。
+// 若上游判定为终局错误，重试只是在浪费配额与请求数，
+// 严重时会被判为异常调用，反而牵连其它账号。
+// 用户反馈「积分莫名少了」时，这类无谓重试是最需要排除的因素之一。
+func RetryForbidden(body string) bool {
+	l := toLower(body)
+	if !contains(l, "retry_policy") {
+		return false
+	}
+	// 只认 retry:false，retry:true 照常重试
+	compact := ""
+	for _, c := range l {
+		if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			compact += string(c)
+		}
+	}
+	return contains(compact, `"retry_policy":{"retry":false}`) ||
+		contains(compact, `"retry_policy":{"retry":0}`)
+}

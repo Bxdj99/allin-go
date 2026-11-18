@@ -413,6 +413,7 @@ func (s *Server) forwardDeepSeek(w http.ResponseWriter, r *http.Request, p *conf
 	var lastErr error
 	for attempt := 0; attempt < maxAccountAttempts; attempt++ {
 		acct := s.pool.PickForSession(p, tried, sessKey)
+		uc.accountID = acct.ID
 		if acct == nil {
 			if attempt == 0 {
 				uc.fail(p.ID, realModel)
