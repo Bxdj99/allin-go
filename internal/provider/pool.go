@@ -2,7 +2,6 @@ package provider
 
 import (
 	"log"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,6 +12,9 @@ import (
 // 账号健康状态。上游 401/403 视为凭据失效，429/5xx 视为临时故障，两者冷却时长不同。
 const (
 	coolAuth      = 30 * time.Minute // 凭据失效：短时间内别再用
+	// coolDeadCredential 是「凭据确定失效」的冷却时长。
+	// token 过期或账号被封不会自己好，继续每 10 分钟试一次纯属浪费。
+	coolDeadCredential = 7 * 24 * time.Hour
 	coolRateLimit = 2 * time.Minute  // 限流
 	coolServer    = 1 * time.Minute  // 上游 5xx
 	coolNetwork   = 30 * time.Second // 网络层错误
@@ -372,6 +374,13 @@ func (p *Pool) Fail(pid, aid string, status int, reason string) {
 	if mult > 8 {
 		mult = 8
 	}
+	// 凭据失效不会自愈：401/403 连续 3 次就按「长期失效」处理，
+	// 冷却 7 天。否则每轮刷新只是把 30 分钟重新点一次，
+	// 界面上永远显示「冷却中」却永远恢复不了，用户也看不出是死号。
+	if (status == 401 || status == 403) && st.failures >= 3 {
+		st.coolUntil = time.Now().Add(coolDeadCredential)
+		return
+	}
 	st.coolUntil = time.Now().Add(cool * time.Duration(mult))
 }
 
@@ -425,29 +434,6 @@ type Stats struct {
 	Switches atomic.Int64
 }
 
-// reorderByLoad 返回一个账号顺序按「已绑定会话数」升序排列的副本。
-// 不修改原 Provider，避免影响配置对象。
-func (p *Pool) reorderByLoad(prov *config.Provider) *config.Provider {
-	if prov == nil || len(prov.Accounts) < 2 {
-		return prov
-	}
-	type item struct {
-		a    *config.Account
-		load int
-	}
-	items := make([]item, 0, len(prov.Accounts))
-	for _, a := range prov.Accounts {
-		items = append(items, item{a: a, load: p.sessions.loadOf(a.ID)})
-	}
-	sort.SliceStable(items, func(i, j int) bool { return items[i].load < items[j].load })
-
-	cp := *prov
-	cp.Accounts = make([]*config.Account, 0, len(items))
-	for _, it := range items {
-		cp.Accounts = append(cp.Accounts, it.a)
-	}
-	return &cp
-}
 
 // pickLeastLoaded 取「已绑定会话数最少」的可用账号，用于 sticky 首次选号。
 // 完全跳过冷却中、被排除、余额不足的账号。

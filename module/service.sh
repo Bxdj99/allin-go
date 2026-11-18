@@ -183,6 +183,24 @@ sync_back() {
     fi
 }
 
+# 从 /api/workbuddy/tasks 的返回里提炼「跑了哪些任务」的摘要。
+#
+# 不用 jq（很多设备没有），用 sed 粗暴提取任务名，够日志核对用。
+# 输出形如：acc=11 report:ok checkin:already streak:locked ...
+summarize_tasks() {
+    RESP="$1"
+    # 账号数
+    n=$(echo "$RESP" | grep -o '"accountId"' | wc -l)
+    # 任务名与状态配对。
+    #
+    # 不能用 sed 的 s///g：整份 JSON 是一行，gsub 会把所有匹配挤成一条，
+    # 只剩最后一个任务。改成先用 grep -o 把所有片段切出来，再整理。
+    PAIRS=$(echo "$RESP" | grep -o '"name":"[a-z-]*","outcome":{"status":"[a-z]*"' 2>/dev/null \
+        | sed 's/"name":"\([a-z-]*\)","outcome":{"status":"\([a-z]*\)"/\1:\2/' \
+        | head -10 | tr '\n' ' ')
+    echo "acc=$n $PAIRS"
+}
+
 # 探测 busybox（找不到也不致命，会退化为 root 启动）
 BUSYBOX=$(find_busybox)
 if [ -n "$BUSYBOX" ]; then
@@ -252,11 +270,27 @@ fi
 
         H=$(date +%H)
         slot="$(date +%Y%m%d)-$H"
-        # 读自动签到开关（面板可改，未配置时默认开启）
-        # config 里是 "autoCheckin": false / true；grep 不到就按开启处理
+
+        # 读自动任务开关。
+        #
+        # 字段在 schedule.autoCheckin，不是顶层 —— 面板写的是 schedule 对象。
+        # 以前读顶层，永远读不到，于是无论面板怎么关都按「开启」处理。
         AC=$(sed -n 's/.*"autoCheckin"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$RUNDATA/config.json" 2>/dev/null | head -1)
         [ -z "$AC" ] && AC=true
-        if [ "$AC" = "true" ] && { [ "$H" = "09" ] || [ "$H" = "21" ]; } && [ "$last" != "$slot" ]; then
+
+        # 执行小时同样从 schedule.checkinHours 读，默认 9 与 21。
+        # 面板上改过时间的话，这里要跟着变，否则改了没用。
+        HOURS=$(sed -n 's/.*"checkinHours"[[:space:]]*:[[:space:]]*\[\([0-9, ]*\)\].*/\1/p' "$RUNDATA/config.json" 2>/dev/null | tr -d ' ' | head -1)
+        [ -z "$HOURS" ] && HOURS="9,21"
+
+        # 判断当前小时是否在计划内
+        IN_HOURS=false
+        for hh in $(echo "$HOURS" | tr ',' ' '); do
+            # 去掉前导零再比，避免 08 与 8 不等
+            hh=$((hh+0))
+            if [ "$hh" = "$((H+0))" ]; then IN_HOURS=true; break; fi
+        done
+        if [ "$AC" = "true" ] && [ "$IN_HOURS" = "true" ] && [ "$last" != "$slot" ]; then
             K=$(sed -n 's/.*"authKey"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$RUNDATA/config.json" 2>/dev/null | head -1)
             if [ -n "$K" ]; then
                 # 全套任务：一次请求跑完 report/checkin/streak/gift/comp/travel/lottery。
@@ -265,9 +299,15 @@ fi
                 RESP=$(curl -s -m 300 -X POST "$API" \
                     -H "Authorization: Bearer $K" \
                     -H 'Content-Type: application/json' -d '{}' 2>/dev/null)
+                # 只记 ok 看不出跑了哪些任务 —— 用户反馈「自动任务好像不是全套」
+                # 时无从核对。这里把每账号的任务名与结果都落一行摘要。
                 case "$RESP" in
-                    *'"ok"'*) log "workbuddy tasks slot=$slot ok" ;;
-                    *)        log "workbuddy tasks slot=$slot 返回异常: $(echo "$RESP" | cut -c1-200)" ;;
+                    *'"ok"'*)
+                        log "workbuddy tasks slot=$slot ok $(summarize_tasks "$RESP")"
+                        ;;
+                    *)
+                        log "workbuddy tasks slot=$slot 返回异常: $(echo "$RESP" | cut -c1-200)"
+                        ;;
                 esac
                 sync_back
             else
