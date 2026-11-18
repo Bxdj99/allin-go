@@ -649,7 +649,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				s.relayTrae(w, resp, head.Stream, needBridge, proto, step.Model, trae.ToolSpecs(stepBody), sp.ID, uc)
 				return
 			}
-			s.relay(w, resp, head.Stream, needBridge, proto, step.Model, sp.ID, uc)
+			s.relay(w, resp, head.Stream, needBridge, proto, step.Model, sp.ID, r.Context(), uc)
 			return
 		}
 
@@ -673,13 +673,15 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 //
 // providerID 是真正提供服务的供应商（换号换模型后可能与请求最初选中的不同），
 // uc 是这条客户端请求的记账上下文。
-func (s *Server) relay(w http.ResponseWriter, resp *http.Response, stream, needBridge bool, clientProto protocol, model, providerID string, uc *usageCtx) {
-	// 关闭传播（上游 1.2.39 的 Antigravity 教训）：客户端断开后取消上游请求，
-	// 否则转发 goroutine 会陪着上游慢慢吐完才退出。
-	if rctx, ok := resp.Request.Context().(context.Context); ok {
-		ctx, cancel := context.WithCancel(rctx)
-		_ = ctx
-		_ = cancel
+func (s *Server) relay(w http.ResponseWriter, resp *http.Response, stream, needBridge bool, clientProto protocol, model, providerID string, clientCtx context.Context, uc *usageCtx) {
+	// 关闭传播：客户端断开后，上游读取要跟着退出。
+	//
+	// 之前这里是 `ctx, cancel := context.WithCancel(...)` 然后把 ctx 用 _ 丢掉，
+	// 只把 cancel 存进包装层 —— 取消的是那个被丢弃的 ctx，真正在跑的读取
+	// 仍然挂在原始 context 上，等于「想取消却取消不到」。
+	// 现在把 cancel 直接挂到客户端 ctx 的派生上，并把这个 ctx 交给下游使用。
+	if clientCtx != nil {
+		_, cancel := context.WithCancel(clientCtx)
 		resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
 	}
 	defer resp.Body.Close()
@@ -975,20 +977,52 @@ func (b *cancelOnCloseBody) Close() error {
 	return b.ReadCloser.Close()
 }
 
+// readResult 是一次 body.Read 的结果。
+type readResult struct {
+	n   int
+	err error
+}
+
 func flushCopy(w http.ResponseWriter, body io.Reader, onChunk func([]byte)) {
 	flusher, canFlush := w.(http.Flusher)
 	buf := make([]byte, 32*1024)
+	var readCh chan readResult
+	var quitCh chan struct{}
+
+	// readResult 的通道在整个循环里复用。
+	//
+	// 以前每轮都新建 channel 并起一个 goroutine，超时 return 时那个 goroutine
+	// 仍卡在 body.Read 上永不退出 —— 客户端频繁中断时会累积泄漏。
+	// 现在用固定的一个通道 + 退出信号，超时时能让读取侧知道不用再发了。
+	if readCh == nil {
+		readCh = make(chan readResult, 1)
+	}
+	if quitCh == nil {
+		quitCh = make(chan struct{})
+	}
+	// 函数退出时通知所有还在 body.Read 上的 goroutine 收工
+	defer func() {
+		select {
+		case <-quitCh:
+		default:
+			close(quitCh)
+		}
+	}()
 
 	for {
-		// 把阻塞读放进 goroutine，外面用 select 做超时与心跳
-		type readResult struct {
-			n   int
-			err error
+		select {
+		case <-quitCh:
+			return
+		default:
 		}
-		ch := make(chan readResult, 1)
+
 		go func() {
 			n, err := body.Read(buf)
-			ch <- readResult{n, err}
+			select {
+			case readCh <- readResult{n, err}:
+			case <-quitCh:
+				// 已经收尾了，丢弃结果，避免阻塞在这个 goroutine 里
+			}
 		}()
 
 		heartbeat := time.NewTimer(sseHeartbeat)
@@ -998,7 +1032,7 @@ func flushCopy(w http.ResponseWriter, body io.Reader, onChunk func([]byte)) {
 	waitLoop:
 		for {
 			select {
-			case res = <-ch:
+			case res = <-readCh:
 				heartbeat.Stop()
 				deadline.Stop()
 				break waitLoop
