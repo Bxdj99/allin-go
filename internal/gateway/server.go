@@ -91,7 +91,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/accounts/import", s.withAuth(s.handleAccountsImport))
 	s.mux.HandleFunc("/api/effort", s.withAuth(s.handleEffort))
 	s.mux.HandleFunc("/api/prompt", s.withAuth(s.handlePrompt))
-	s.mux.HandleFunc("/api/prompt/preset", s.withAuth(s.handlePromptPreset))
 	s.mux.HandleFunc("/api/keys", s.withAuth(s.handleKeys))
 	s.mux.HandleFunc("/api/keys/toggle", s.withAuth(s.handleKeyToggle))
 	s.mux.HandleFunc("/api/usage", s.withAuth(s.handleUsage))

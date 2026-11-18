@@ -612,7 +612,6 @@
     </div>
     <div class="btnrow">
       <button class="btn primary" id="btnSavePrompt">保存</button>
-      <button class="btn" id="btnPresetM0SS">一键写入 M0SS 人设</button>
       <button class="btn" id="btnReloadPrompt">重新加载</button>
     </div>
     <div id="promptMsg" class="dim" style="font-size:12px;margin-top:6px"></div>
@@ -2656,19 +2655,6 @@ async function savePrompt() {
   }
 }
 
-async function presetM0SS() {
-  if (!confirm('用内置的 M0SS 人设覆盖当前提示词？（模式会设成 inject）')) return;
-  try {
-    const d = await api('/api/prompt/preset', { method: 'POST', body: { name: 'm0ss' } });
-    await loadPrompt();
-    el('promptMsg').innerHTML = '<span class="ok">已写入 M0SS 人设（' + (d.length || 0) + ' 字符）</span>';
-    toast('已写入 M0SS 人设', 'ok');
-  } catch (e) {
-    el('promptMsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
-    toast(e.message, 'err');
-  }
-}
-
 // ---------- 客户端 API Key ----------
 async function loadKeys() {
   const box = el('keyList');
@@ -3074,7 +3060,6 @@ on('btnApplyUpdate', 'click', applyUpdate);
 on('btnSaveEffort', 'click', saveEffort);
 on('btnReloadEffort', 'click', loadEffort);
 on('btnSavePrompt', 'click', savePrompt);
-on('btnPresetM0SS', 'click', presetM0SS);
 on('btnReloadPrompt', 'click', loadPrompt);
 on('promptText', 'input', () => { el('promptLen').textContent = '（' + el('promptText').value.length + ' 字符）'; });
 on('btnNewKey', 'click', createKey);

@@ -82,28 +82,3 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "只支持 GET/POST"})
 }
-
-// handlePromptPreset 一键写入内置人设（目前提供 M0SS 那份）。
-//
-//	POST /api/prompt/preset  {"name":"m0ss"}
-func (s *Server) handlePromptPreset(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "只支持 POST"})
-		return
-	}
-	var body struct {
-		Name string `json:"name"`
-	}
-	_ = decodeJSON(r, &body)
-	if body.Name != "m0ss" && body.Name != "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "未知预设: " + body.Name})
-		return
-	}
-	cfg := s.store.Snapshot()
-	cfg.Prompt = config.PromptConfig{Mode: prompt.ModeInject, Inline: M0SSPrompt}
-	if err := s.store.Save(cfg); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mode": prompt.ModeInject, "length": len(M0SSPrompt)})
-}
