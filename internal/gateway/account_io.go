@@ -44,7 +44,10 @@ func (s *Server) handleAccountsExport(w http.ResponseWriter, r *http.Request) {
 		MachineID  string `json:"machineId,omitempty"`
 		PublicKey  string `json:"publicKey,omitempty"`
 		PrivateKey string `json:"privateKey,omitempty"`
-		Enabled    *bool  `json:"enabled,omitempty"`
+		// Expires 是 access token 到期毫秒。带上它，导入后自动续期巡检
+		// 才能知道什么时候该刷。
+		Expires int64 `json:"expires,omitempty"`
+		Enabled *bool `json:"enabled,omitempty"`
 	}
 	var rows []row
 	for _, p := range cfg.Providers {
@@ -64,6 +67,7 @@ func (s *Server) handleAccountsExport(w http.ResponseWriter, r *http.Request) {
 				Domain: a.Domain, Realm: a.Realm,
 				DeviceID: a.DeviceID, MachineID: a.MachineID,
 				PublicKey: a.PublicKey, PrivateKey: a.PrivateKey,
+				Expires: a.Expires,
 				Enabled: a.Enabled,
 			})
 		}
@@ -114,8 +118,12 @@ func (s *Server) handleAccountsImport(w http.ResponseWriter, r *http.Request) {
 			ID         string `json:"id"`
 			Name       string `json:"name"`
 			Type       string `json:"type"`
-			Access     string `json:"access"`
-			Refresh    string `json:"refresh"`
+			Access      string `json:"access"`
+			AccessToken string `json:"accessToken"`
+			AccessSnake string `json:"access_token"`
+			Refresh     string `json:"refresh"`
+			RefreshAlt  string `json:"refreshToken"`
+			RefreshSnk  string `json:"refresh_token"`
 			UID        string `json:"uid"`
 			Domain     string `json:"domain"`
 			Realm      string `json:"realm"`
@@ -123,6 +131,7 @@ func (s *Server) handleAccountsImport(w http.ResponseWriter, r *http.Request) {
 			MachineID  string `json:"machineId"`
 			PublicKey  string `json:"publicKey"`
 			PrivateKey string `json:"privateKey"`
+			Expires    int64  `json:"expires"`
 			Enabled    *bool  `json:"enabled"`
 		} `json:"accounts"`
 		ProviderKeys []struct {
@@ -190,11 +199,14 @@ func (s *Server) handleAccountsImport(w http.ResponseWriter, r *http.Request) {
 		if na.Type != "" {
 			target.Type = na.Type
 		}
-		if na.Access != "" {
-			target.Access = na.Access
+		// 兼容 App 导出的几种别名写法
+		access := firstNonEmptyStr(na.Access, na.AccessToken, na.AccessSnake)
+		if access != "" {
+			target.Access = access
 		}
-		if na.Refresh != "" {
-			target.Refresh = na.Refresh
+		refresh := firstNonEmptyStr(na.Refresh, na.RefreshAlt, na.RefreshSnk)
+		if refresh != "" {
+			target.Refresh = refresh
 		}
 		if na.UID != "" {
 			target.UID = na.UID
@@ -217,6 +229,9 @@ func (s *Server) handleAccountsImport(w http.ResponseWriter, r *http.Request) {
 		if na.PrivateKey != "" {
 			target.PrivateKey = na.PrivateKey
 		}
+		if na.Expires != 0 {
+			target.Expires = na.Expires
+		}
 		if na.Enabled != nil {
 			target.Enabled = na.Enabled
 		}
@@ -238,6 +253,17 @@ func (s *Server) handleAccountsImport(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.Save(cfg); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "保存失败: " + err.Error()})
 		return
+	}
+	// 导入进来的账号是新的凭据，之前基于旧凭据的冷却/需重登标记必须清掉，
+	// 否则换了好 token 也选不中。
+	for _, na := range in.Accounts {
+		pid := strings.TrimSpace(na.ProviderID)
+		id := strings.TrimSpace(na.ID)
+		if pid == "" || id == "" {
+			continue
+		}
+		s.pool.MarkNeedRelogin(pid, id, false)
+		s.pool.Reset(pid, id)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "added": added, "updated": updated, "skipped": skipped,
@@ -279,4 +305,14 @@ func guessKind(id string) string {
 	default:
 		return "openai"
 	}
+}
+
+// firstNonEmptyStr 返回第一个非空字符串。
+func firstNonEmptyStr(vs ...string) string {
+	for _, v := range vs {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
