@@ -522,6 +522,31 @@
   </div>
 
   <div class="card">
+    <h2>粘贴 Token / Cookie 建账号</h2>
+    <div class="dim" style="font-size:12px;margin-bottom:10px">
+      小浣熊网页版已登录时，浏览器里就有可用的凭据，贴进来即可，不必再走授权流程。
+      <b>整段 Cookie 和单独 token 都支持</b>，会自动识别。
+    </div>
+    <div class="hint" style="margin-bottom:12px">
+      <b>方式一（最简单）</b>：登录 <code>xiaohuanxiong.com</code> 后按 F12 → Console，执行下面这行，把整段结果粘贴进来：<br>
+      <code style="font-size:11px;word-break:break-all">document.cookie</code><br>
+      <b>方式二</b>：Application → Cookies → <code>xiaohuanxiong.com</code>，找 <code>xhx_token</code> 那一行，复制它的值。
+    </div>
+    <div class="field">
+      <label>Cookie 或 access token（两样都行，自动识别）</label>
+      <textarea id="fRaccoonToken" rows="4" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="整段 cookie（xhx_token=eyJ...; user_id=...）或直接贴 eyJhbGciOi..."></textarea>
+    </div>
+    <div class="field" style="margin-bottom:0">
+      <label>账号名称（可空，默认取 token 里的名字）</label>
+      <input id="fRaccoonName" autocomplete="off">
+    </div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnRaccoonToken">验证并保存</button>
+      <span class="dim" id="raccoonTokenMsg" style="font-size:12px"></span>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>账号池健康 <button class="btn sm" id="btnPool" style="margin-left:auto">刷新</button></h2>
     <div id="poolBox" class="dim">点「刷新」查看成功/失败/冷却情况</div>
   </div>
@@ -2643,6 +2668,34 @@ on('btnLogClear', 'click', async (e) => {
 });
 
 on('btnLogRefresh', 'click', loadLogs);
+
+/* ===================== 粘贴 Token 建账号 ===================== */
+
+on('btnRaccoonToken', 'click', async (e) => {
+  const btn = e.currentTarget;
+  const token = el('fRaccoonToken').value.trim();
+  if (!token) { toast('先粘贴 token', 'err'); return; }
+  btn.disabled = true;
+  el('raccoonTokenMsg').innerHTML = '<span class="dim">正在验证 token…</span>';
+  try {
+    const r = await api('/api/auth/raccoon/token', {
+      method: 'POST',
+      body: { token: token, name: el('fRaccoonName').value.trim(), verify: true },
+    });
+    el('raccoonTokenMsg').innerHTML = '<span class="ok">已保存：' + esc(r.name || r.account) +
+      (r.verified ? '（验证通过）' : '') + '</span>';
+    toast('小浣熊账号已添加', 'ok');
+    el('fRaccoonToken').value = '';
+    el('fRaccoonName').value = '';
+    await loadProviders();
+    loadOverview();
+  } catch (err) {
+    el('raccoonTokenMsg').innerHTML = '<span class="err">' + esc(err.message) + '</span>';
+    toast('添加失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 on('btnAccountSave', 'click', async (e) => {
   const btn = e.currentTarget;

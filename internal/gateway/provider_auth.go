@@ -290,6 +290,8 @@ func (s *Server) handleProviderAuth(w http.ResponseWriter, r *http.Request) {
 		s.handleAuthStart(w, r, vendor)
 	case "poll":
 		s.handleAuthPoll(w, r, vendor)
+	case "token":
+		s.handleAuthToken(w, r, vendor)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "不支持的动作: " + action})
 	}
@@ -1077,4 +1079,110 @@ func authFirst(vals ...string) string {
 func authString(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// handleAuthToken 用现成 token 直接建账号（目前只支持小浣熊）。
+//
+//	POST /api/auth/raccoon/token  {"token":"eyJ..."}
+//
+// 用途：用户已在网页版登录时，浏览器里就有可用的 access token，
+// 贴进来即可，不必再走一遍授权码流程。
+// 建好后会立刻发一次真实请求验证可用性，避免存进一个死 token。
+func (s *Server) handleAuthToken(w http.ResponseWriter, r *http.Request, vendor string) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "只支持 POST"})
+		return
+	}
+	if vendor != "raccoon" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"ok": false, "error": "该供应商不支持直接粘贴 token，请走 " + vendor + "/start",
+		})
+		return
+	}
+
+	var in struct {
+		Token  string `json:"token"`
+		Name   string `json:"name"`
+		Verify *bool  `json:"verify"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "JSON 解析失败: " + err.Error()})
+		return
+	}
+
+	acc, err := raccoon.AccountFromToken(in.Token)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(in.Name) != "" {
+		acc.Name = strings.TrimSpace(in.Name)
+		acc.ID = acc.Name
+	}
+
+	// 默认验证一次，确保这个 token 真能用
+	doVerify := in.Verify == nil || *in.Verify
+	verified := false
+	verifyNote := ""
+	if doVerify {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		if err := raccoon.Ping(ctx, acc); err != nil {
+			verifyNote = err.Error()
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"ok": false, "error": "token 验证失败：" + err.Error(),
+				"hint": "确认是 access token 而不是 refresh token；也确认没复制漏字符。",
+			})
+			return
+		}
+		verified = true
+	}
+
+	if err := s.saveRaccoonAccount(acc); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "保存失败: " + err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"account":  acc.ID,
+		"name":     acc.Name,
+		"uid":      acc.UID,
+		"expires":  acc.Expires,
+		"verified": verified,
+		"note":     verifyNote,
+	})
+}
+
+// saveRaccoonAccount 把小浣熊账号写进配置（同 ID 覆盖）。
+func (s *Server) saveRaccoonAccount(acc *raccoon.Account) error {
+	cfg := s.store.Snapshot()
+	p := cfg.FindProvider(raccoon.ProviderID)
+	if p == nil {
+		p = &config.Provider{ID: raccoon.ProviderID, Name: "商汤小浣熊", Kind: raccoon.ProviderID}
+		cfg.Providers = append(cfg.Providers, p)
+	}
+	// 同 ID 或同 UID 视为同一个账号，覆盖
+	var target *config.Account
+	for _, a := range p.Accounts {
+		if a == nil {
+			continue
+		}
+		if a.ID == acc.ID || (acc.UID != "" && a.UID == acc.UID) {
+			target = a
+			break
+		}
+	}
+	if target == nil {
+		target = &config.Account{ID: acc.ID, AddedAt: time.Now().UnixMilli()}
+		p.Accounts = append(p.Accounts, target)
+	}
+	target.Name = acc.Name
+	target.Access = acc.Access
+	target.Refresh = acc.Refresh
+	target.UID = acc.UID
+	target.Type = acc.Type
+	target.Expires = acc.Expires
+	target.AddedAt = acc.AddedAt
+	return s.store.Save(cfg)
 }

@@ -630,3 +630,151 @@ func snippet(raw []byte) string {
 	}
 	return s
 }
+
+// AccountFromToken 用现成的 access token 直接构造账号。
+//
+// 用途：用户已在网页版登录时，浏览器里就有一个可用的 access token，
+// 没必要再走一遍授权码流程。贴进来即可用。
+//
+// 与 ExchangeCode 的区别：
+//   - 只有 access，没有 refresh —— cookie 形态的凭据本来就没有续期能力，
+//     所以标记为 desktop 来源，RefreshToken 会明确拒绝而不是假装能续。
+//   - 不做网络校验：调用方需要自己发一次请求验证可用性（面板上有「测试」）。
+//
+// token 允许带 "Bearer " 前缀，也允许被引号包裹，这里统一清洗。
+func AccountFromToken(raw string) (*Account, error) {
+	// 允许直接贴整段浏览器 Cookie：先尝试从中提取 token。
+	access := cleanToken(ExtractTokenFromCookie(raw))
+	if access == "" {
+		return nil, errors.New("raccoon: 没找到 token（粘贴 access token 或整段 cookie 都可以）")
+	}
+	if len(access) > 8192 {
+		return nil, errors.New("raccoon: token 过长")
+	}
+
+	acc := &Account{
+		Access:  access,
+		Token:   access,
+		Source:  "desktop",
+		Desktop: true,
+		Type:    "oauth",
+		AddedAt: time.Now().UnixMilli(),
+		Expires: jwtExpiryMillis(access),
+		Name:    jwtString(access, "name"),
+		UID:     jwtUID(access),
+	}
+	acc.ID = firstNonEmpty(acc.Name, prefixOr(acc.UID, "Raccoon-"), "商汤小浣熊")
+	return acc, nil
+}
+
+// Ping 用真实接口验证一个账号当前是否可用。
+//
+// 走模型目录接口而不是聊天接口：目录是只读的，不会消耗额度，
+// 又同样需要 Bearer 鉴权，是判断 token 有效性的最小代价方式。
+func Ping(ctx context.Context, acc *Account) error {
+	if acc == nil {
+		return errors.New("raccoon: 账号为空")
+	}
+	token := acc.Bearer()
+	if token == "" {
+		return errors.New("raccoon: 账号没有 access token")
+	}
+	models, status, err := fetchCatalog(ctx, token)
+	if err != nil {
+		if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			return fmt.Errorf("token 无效或已过期（HTTP %d）", status)
+		}
+		return err
+	}
+	if len(models) == 0 {
+		return errors.New("token 可用，但模型目录为空（账号可能未开通）")
+	}
+	return nil
+}
+
+// ExtractTokenFromCookie 从一段浏览器 Cookie 文本里取出 access token。
+//
+// 用户拿到的往往是整条 Cookie 字符串（一长串 name=value; name=value），
+// 直接贴进来比让他们自己找 token 容易得多。
+//
+// 识别顺序：
+//  1. xhx_token —— 小浣熊当前的 token cookie 名
+//  2. 任何名字里同时含 token 与 xhx/xiaohuanxiong 的
+//  3. 任何能解析成 JWT（三段点分、中段可 base64 解码）的值
+//
+// 找到后会去掉可能存在的 "Bearer " 前缀与 URL 编码。
+func ExtractTokenFromCookie(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+
+	// 纯 token 直接返回
+	if looksLikeJWT(s) {
+		return cleanToken(s)
+	}
+
+	for _, part := range strings.Split(s, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		i := strings.Index(part, "=")
+		if i <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(part[:i])
+		val := strings.TrimSpace(part[i+1:])
+		if val == "" {
+			continue
+		}
+		// URL 解码（cookie 值可能是 %3D 结尾的 base64）
+		if dec, err := url.QueryUnescape(val); err == nil {
+			val = dec
+		}
+		lower := strings.ToLower(name)
+		if lower == "xhx_token" {
+			if t := cleanToken(val); t != "" {
+				return t
+			}
+		}
+		if looksLikeJWT(val) && (strings.Contains(lower, "token")) {
+			return cleanToken(val)
+		}
+	}
+
+	// 最后一轮：不挑名字，只要长得像 JWT
+	for _, part := range strings.Split(s, ";") {
+		i := strings.Index(part, "=")
+		if i <= 0 {
+			continue
+		}
+		val := strings.TrimSpace(part[i+1:])
+		if dec, err := url.QueryUnescape(val); err == nil {
+			val = dec
+		}
+		if looksLikeJWT(val) {
+			return cleanToken(val)
+		}
+	}
+	return ""
+}
+
+// looksLikeJWT 判断字符串是否像 JWT：三段点分，且中段能 base64 解出 JSON。
+func looksLikeJWT(v string) bool {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "Bearer ")
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	body := parts[1]
+	if pad := len(body) % 4; pad != 0 {
+		body += strings.Repeat("=", 4-pad)
+	}
+	dec, err := base64.URLEncoding.DecodeString(body)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(string(dec)), "{")
+}

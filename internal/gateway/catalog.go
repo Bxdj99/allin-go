@@ -27,6 +27,7 @@ import (
 	"allin/internal/config"
 	"allin/internal/provider"
 	"allin/internal/provider/openaicatalog"
+	"allin/internal/provider/raccoon"
 	"allin/internal/provider/trae"
 	"allin/internal/provider/workbuddy"
 )
@@ -69,6 +70,40 @@ func (s *Server) syncProviderModels(ctx context.Context, p *config.Provider) ([]
 		return s.syncWorkBuddy(ctx, p)
 	case provider.KindTrae:
 		return s.syncTrae(ctx, p)
+	case provider.KindRaccoon:
+		// 小浣熊的模型目录要按账号拉（每个账号的可用模型可能不同），
+		// 所以遍历启用的账号求并集，和 WorkBuddy 的做法一致。
+		var all []string
+		seen := map[string]bool{}
+		var lastErr error
+		for _, a := range p.Accounts {
+			if a == nil || !a.IsEnabled() || a.Key() == "" {
+				continue
+			}
+			acc := &raccoon.Account{Access: a.Access, Token: a.Access, Source: "desktop", Desktop: true}
+			if a.Refresh != "" {
+				acc.Source = "browser"
+				acc.Desktop = false
+			}
+			ms, err := raccoon.Models(ctx, acc)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			for _, m := range ms {
+				if m != "" && !seen[m] {
+					seen[m] = true
+					all = append(all, m)
+				}
+			}
+		}
+		if len(all) == 0 {
+			if lastErr != nil {
+				return nil, "", lastErr
+			}
+			return nil, "", fmt.Errorf("没有可用的小浣熊账号（需要已登录且启用）")
+		}
+		return all, "", nil
 	case provider.KindOpenAI:
 		base := p.BaseURL
 		if strings.TrimSpace(base) == "" {
