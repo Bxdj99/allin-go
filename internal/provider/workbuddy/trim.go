@@ -2,6 +2,7 @@ package workbuddy
 
 import (
 	"encoding/json"
+	"sort"
 	"fmt"
 	"strings"
 )
@@ -34,6 +35,10 @@ const (
 	// 留 10% 缓冲避免因低估而被上游 400 拒。
 	// 真被拒也有兜底：server.go 里会按 2/3 逐轮收紧预算重发。
 	maxPromptTokens = 950_000
+	// maxTruncateRounds 是「丢整条」之前最多做几轮渐进截断。
+	maxTruncateRounds = 30
+	// minTruncatableChars 低于这个长度的消息不值得截断。
+	minTruncatableChars = 400
 	// minKeepMessages 是无论怎么裁都要保留的最近消息条数。
 	// 20 条对长对话偏少，会让刚发生的几轮之外全被切掉；
 	// 提到 40 条，配合更高的阈值，尽量少动上下文。
@@ -41,7 +46,8 @@ const (
 	// maxAnchorMessages 是开头锚点最多保留几条用户消息。
 	// 太少记不住任务目标，太多会挤掉近期上下文。
 	maxAnchorMessages = 6
-	// charsPerToken 是粗略换算；中文约 1.5 字/token，英文约 4 字符/token。
+	// charsPerToken 仅用于「把 token 预算折成字符预算」这类粗略换算。
+	// 真正算 token 用 estimateTextTokens（区分中日韩与其余字符）。
 	// 原来取 3，实测会低估：agent 场景里大量是 JSON、工具调用等低信息密度文本，
 	// 真实 token 数明显高于 char/3。取 2 更接近实际，且偏保守。
 	charsPerToken = 2
@@ -91,15 +97,16 @@ func TrimContextTo(body []byte, budget int) (*TrimResult, error) {
 	}
 
 	// 估算整体 token：消息与工具分开算，工具用更小的分母（权重更高）
-	msgChars := 0
+	// 逐条按 CJK 规则估算，工具 schema 用更小分母（权重更高）
+	msgTokens := 0
 	for _, msg := range msgs {
-		msgChars += len(msg)
+		msgTokens += estimateRawTokens(msg)
 	}
 	toolsChars := 0
 	if t, ok := m["tools"]; ok {
 		toolsChars = len(t)
 	}
-	est := msgChars/charsPerToken + toolsChars/toolsCharsPerToken
+	est := msgTokens + toolsChars/toolsCharsPerToken
 	if est <= limit {
 		return &TrimResult{Body: body, Estimated: est}, nil
 	}
@@ -152,8 +159,34 @@ func TrimContextTo(body []byte, budget int) (*TrimResult, error) {
 		anchorChars += len(msg)
 	}
 
-	// 再从尾部往前累加，能放下多少就保留多少
-	var kept []json.RawMessage
+	// 先挑出「必须保留」的消息：
+	//   1. 含图片的消息 —— 用户发图就是要模型看图，裁掉等于答非所问
+	//   2. 最新一条 user —— 这是本次请求的核心问题
+	//
+	// 它们即使超预算也要保留；否则裁到最后模型连问题都看不到。
+	mandatory := make(map[int]bool)
+	latestUser := -1
+	for i := len(rest) - 1; i >= 0; i-- {
+		var head struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		}
+		if json.Unmarshal(rest[i], &head) != nil {
+			continue
+		}
+		if head.Role == "user" && latestUser < 0 {
+			latestUser = i
+		}
+		if hasImageContent(head.Content) {
+			mandatory[i] = true
+		}
+	}
+	if latestUser >= 0 {
+		mandatory[latestUser] = true
+	}
+
+	// 再从尾部往前累加，能放下多少就保留多少；强制保留的忽略预算
+	var keptIdx []int
 	acc := anchorChars
 	for i := len(rest) - 1; i >= 0; i-- {
 		n := len(rest[i])
@@ -161,11 +194,28 @@ func TrimContextTo(body []byte, budget int) (*TrimResult, error) {
 		if i < len(anchors) {
 			break
 		}
-		if acc+n > availChars && len(kept) >= minKeepMessages {
+		if !mandatory[i] && acc+n > availChars && len(keptIdx) >= minKeepMessages {
 			break
 		}
-		kept = append([]json.RawMessage{rest[i]}, kept...)
+		keptIdx = append(keptIdx, i)
 		acc += n
+	}
+	// 把强制保留但没被窗口圈进来的消息补上
+	inWindow := make(map[int]bool, len(keptIdx))
+	for _, i := range keptIdx {
+		inWindow[i] = true
+	}
+	for i := range mandatory {
+		if !inWindow[i] && (len(anchors) == 0 || i >= len(anchors)) {
+			keptIdx = append(keptIdx, i)
+			acc += len(rest[i])
+		}
+	}
+	sort.Sort(sort.IntSlice(keptIdx))
+
+	var kept []json.RawMessage
+	for _, i := range keptIdx {
+		kept = append(kept, rest[i])
 	}
 
 	// 锚点与近期窗口之间若确有消息被丢掉，插一条提示，
@@ -217,6 +267,40 @@ func TrimContextTo(body []byte, budget int) (*TrimResult, error) {
 		}
 	}
 
+	// 渐进截断：仍超预算就反复截断「当前最长的那条可截断文本」。
+	//
+	// 这是「丢整条」之前的最后一层缓冲。区别很大：
+	//   - 截断只丢内容尾部，消息本身还在，模型知道这里发生过什么
+	//   - 丢整条会让中间的对话直接消失
+	// 所以优先截断，实在不行才丢。
+	//
+	// system 与含图片的消息不参与截断（前者行为依赖，后者截了就没意义）。
+	for round := 0; round < maxTruncateRounds; round++ {
+		if trimmedEstimate(kept, toolsChars) <= limit {
+			break
+		}
+		longestIdx, longestLen := -1, 0
+		for i, raw := range kept {
+			if isProtectedFromTruncate(raw) {
+				continue
+			}
+			n := len(raw)
+			if n > longestLen && n > minTruncatableChars {
+				longestIdx, longestLen = i, n
+			}
+		}
+		if longestIdx < 0 {
+			break
+		}
+		// 每次砍到当前长度的一半，至少留 64 字符
+		target := longestLen / 2
+		if shrunk, ok := shrinkMessage(kept[longestIdx], target); ok {
+			kept[longestIdx] = shrunk
+			continue
+		}
+		break
+	}
+
 
 	out := append(append([]json.RawMessage{}, systems...), kept...)
 	buf, err := json.Marshal(out)
@@ -231,12 +315,11 @@ func TrimContextTo(body []byte, budget int) (*TrimResult, error) {
 
 	// 用最终产物重新估算：上面做了配对清理、单条截断、图片限流，
 	// 这些都会改变实际体积，沿用裁剪时的 acc 会高估。
-	finalMsgs, finalTools := 0, 0
+	finalMsgs := 0
 	for _, raw := range kept {
-		finalMsgs += len(raw)
+		finalMsgs += estimateRawTokens(raw)
 	}
-	finalTools = toolsChars
-	est2 := finalMsgs/charsPerToken + finalTools/toolsCharsPerToken
+	est2 := finalMsgs + toolsChars/toolsCharsPerToken
 	return &TrimResult{
 		Body:      nb,
 		Dropped:   len(rest) - len(kept),
@@ -453,10 +536,127 @@ func shrinkMessage(raw json.RawMessage, limit int) (json.RawMessage, bool) {
 func trimmedEstimate(msgs []json.RawMessage, toolsChars int) int {
 	total := 0
 	for _, raw := range msgs {
-		total += len(raw)
+		total += estimateRawTokens(raw)
 	}
-	return total/charsPerToken + toolsChars/toolsCharsPerToken
+	return total + toolsChars/toolsCharsPerToken
 }
 
 // DefaultPromptBudget 返回默认裁剪阈值，供网关做渐进式收紧的起点。
 func DefaultPromptBudget() int { return maxPromptTokens }
+
+// estimateTextTokens 估算一段文本的 token 数。
+//
+// 中日韩字符按 1 字符 1 token，其余按 4 字符 1 token。
+// 这比「一律 char/2」准得多：
+//   - 中文在 char/2 下被低估一半 → 裁剪该触发时不触发 → 上游 400
+//   - 英文在 char/2 下被高估一倍 → 明明没超也裁掉 → 模型丢上下文
+//
+// 阈值 0x2E80 覆盖 CJK 部首、汉字、假名、韩文等区段。
+func estimateTextTokens(s string) int {
+	if s == "" {
+		return 0
+	}
+	cjk, other := 0, 0
+	for _, r := range s {
+		if r >= 0x2E80 {
+			cjk++
+		} else {
+			other++
+		}
+	}
+	return cjk + (other+3)/4
+}
+
+// estimateRawTokens 估算一段原始 JSON 的 token 数（含引号与键名）。
+func estimateRawTokens(raw []byte) int {
+	return estimateTextTokens(string(raw))
+}
+
+// hasImageContent 判断一条消息的 content 里是否含图片块。
+//
+// OpenAI 形态是 [{"type":"image_url",...}]，Anthropic 是 [{"type":"image",...}]，
+// 两种都认。
+func hasImageContent(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	// 字符串形态一定没有图片
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return false
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &blocks) != nil {
+		return false
+	}
+	for _, b := range blocks {
+		if b.Type == "image_url" || b.Type == "image" {
+			return true
+		}
+	}
+	return false
+}
+
+// isProtectedFromTruncate 判断一条消息是否禁止内容截断。
+//
+// system / developer 消息是行为指令，截了模型就变了；
+// 含图片的消息截文本没意义（体积在 base64 里）。
+func isProtectedFromTruncate(raw json.RawMessage) bool {
+	var m struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return true
+	}
+	if m.Role == "system" || m.Role == "developer" {
+		return true
+	}
+	return hasImageContent(m.Content)
+}
+
+// CapMaxTokens 把请求里的输出上限封顶。
+//
+// 只下调不上调：客户端要 100、上限 4096 时保持 100 不变；
+// 客户端要 100000、上限 4096 时改为 4096。
+// 目的是防止客户端传一个离谱的值导致上游拒单或费用失控。
+//
+// 同时处理 max_tokens 与 max_completion_tokens 两种字段名。
+func CapMaxTokens(body []byte, cap int) []byte {
+	if cap <= 0 || len(body) == 0 {
+		return body
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(body, &m) != nil {
+		return body
+	}
+	changed := false
+	for _, k := range []string{"max_tokens", "max_completion_tokens"} {
+		raw, ok := m[k]
+		if !ok {
+			continue
+		}
+		var v float64
+		if json.Unmarshal(raw, &v) != nil {
+			continue
+		}
+		if v > float64(cap) {
+			buf, err := json.Marshal(cap)
+			if err != nil {
+				continue
+			}
+			m[k] = buf
+			changed = true
+		}
+	}
+	if !changed {
+		return body
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return body
+	}
+	return out
+}

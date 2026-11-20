@@ -367,6 +367,11 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		// 放在裁剪之前：压缩通常是「无损」的——模型仍看得到调用过什么工具、
 		// 返回了多大结果，只是看不到原始内容。多数长会话压完就落回阈值内，
 		// 不需要裁剪，也就不会丢掉开头的任务目标。
+		// 输出上限封顶：只下调不上调，防止客户端传离谱值
+		if capOut := cfg.Server.MaxOutputCap(); capOut > 0 {
+			upstreamBody = workbuddy.CapMaxTokens(upstreamBody, capOut)
+		}
+
 		if cfg.Server.HistoryCompressEnabled() {
 			opts := workbuddy.CompressOptions{
 				KeepRecentGroups: cfg.Server.CompressKeepRecentGroups(),

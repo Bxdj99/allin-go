@@ -37,11 +37,43 @@ import (
 	"allin/internal/provider/wenxin"
 )
 
-// raccoonCallbackPort 是小浣熊桌面端回环回调的端口。
+// raccoonCallbackPort 是小浣熊回环回调的**首选**端口。
 //
-// 小浣熊的 redirect 是随授权请求一起传上去的（服务端不校验固定端口），
-// 这里钉一个固定值只为让面板能提前把「完整回调链接」展示出来。
+// 不是硬性要求：redirect 是随授权请求一起传上去的，服务端不校验端口，
+// 所以占不到时换一个随机端口完全没问题。
+// 优先用固定值是为了面板能提前把完整回调链接展示出来；
+// 若该端口被官方客户端等程序占用，会自动退到随机端口。
 const raccoonCallbackPort = 18765
+
+// startCallbackWaiter 先试首选端口，占不到就换系统随机分配。
+//
+// 为什么要退化：固定端口容易被别的程序（尤其小浣熊官方客户端）占用，
+// 占不到时旧代码会提示「端口没占住」并要求用户手动贴回调链接，
+// 体验很差。随机端口能直接绕过这个冲突。
+func startCallbackWaiter(preferred int, path string) (*codeWaiter, error) {
+	if preferred > 0 {
+		if cw, err := startCodeWaiter(preferred, path); err == nil {
+			return cw, nil
+		}
+	}
+	// 让内核分配空闲端口
+	cw, err := startCodeWaiter(0, path)
+	if err != nil {
+		return nil, err
+	}
+	return cw, nil
+}
+
+// cbPortOf 取回调监听实际使用的端口。
+func cbPortOf(cw *codeWaiter) int {
+	if cw == nil || cw.ln == nil {
+		return 0
+	}
+	if addr, ok := cw.ln.Addr().(*net.TCPAddr); ok {
+		return addr.Port
+	}
+	return 0
+}
 
 // authVendor 描述一个 vendor 在配置里对应的供应商身份。
 type authVendor struct {
@@ -518,17 +550,27 @@ func startAuthFlow(ctx context.Context, vendor string) (*authFlow, map[string]an
 
 	case "raccoon":
 		state := newAuthFlowID()
-		redirect := fmt.Sprintf("http://127.0.0.1:%d%s", raccoonCallbackPort, raccoon.CallbackPath)
+
+		// 先起监听拿到真实端口，再拼 redirect ——
+		// 端口可能不是首选值（被占用时退到随机），必须先绑定后取值。
+		cw, lerr := startCallbackWaiter(raccoonCallbackPort, raccoon.CallbackPath)
+		port := raccoonCallbackPort
+		if lerr == nil {
+			if actual := cbPortOf(cw); actual > 0 {
+				port = actual
+			}
+		}
+		redirect := fmt.Sprintf("http://127.0.0.1:%d%s", port, raccoon.CallbackPath)
+
 		af := &authFlow{
 			vendor: vendor, provider: raccoon.ProviderID,
 			created: now, deadline: now.Add(10 * time.Minute),
 			rc: &raccoonState{state: state, redirect: redirect},
 		}
-		if cw, lerr := startCodeWaiter(raccoonCallbackPort, raccoon.CallbackPath); lerr == nil {
+		if lerr == nil {
 			af.ca = cw
 		} else {
-			af.hint = fmt.Sprintf("本机回调端口 %d 没占住（%v），授权后请把浏览器地址栏的完整链接贴回来",
-				raccoonCallbackPort, lerr)
+			af.hint = fmt.Sprintf("本机回调端口没占住（%v），授权后请把浏览器地址栏的完整链接贴回来", lerr)
 		}
 		out["url"] = raccoon.AuthorizeURLFor(state, redirect)
 		out["needsCode"] = true

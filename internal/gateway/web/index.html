@@ -571,9 +571,13 @@
       <label>保留最近的工具调用组数（越大越保守）</label>
       <input id="fKeepRecent" type="number" min="0" max="200" value="6" style="width:120px">
     </div>
+    <div class="field">
+      <label>输出 token 上限（0 = 不限制；只在客户端传得更大时下调）</label>
+      <input id="fMaxOutput" type="number" min="0" max="2000000" value="0" style="width:160px">
+    </div>
     <div class="btnrow">
       <button class="btn primary" id="btnCompressToggle">开启压缩</button>
-      <button class="btn" id="btnCompressSave">保存保留组数</button>
+      <button class="btn" id="btnCompressSave">保存设置</button>
       <span class="dim" id="compressState" style="font-size:12px"></span>
     </div>
   </div>
@@ -2547,6 +2551,7 @@ async function loadCompress() {
     const d = await api('/api/compress');
     _compressEnabled = !!d.enabled;
     el('fKeepRecent').value = d.keepRecent != null ? d.keepRecent : 6;
+    el('fMaxOutput').value = d.maxOutput != null ? d.maxOutput : 0;
     renderCompressToggle();
   } catch (e) {
     el('compressState').innerHTML = '<span class="err">加载失败：' + esc(e.message) + '</span>';
@@ -2585,13 +2590,15 @@ on('btnCompressToggle', 'click', async (e) => {
 on('btnCompressSave', 'click', async (e) => {
   const btn = e.currentTarget;
   const n = parseInt(el('fKeepRecent').value, 10);
+  const mo = parseInt(el('fMaxOutput').value, 10) || 0;
   if (isNaN(n) || n < 0 || n > 200) { toast('保留组数需在 0-200 之间', 'err'); return; }
+  if (mo < 0 || mo > 2000000) { toast('输出上限需在 0-2000000 之间', 'err'); return; }
   btn.disabled = true;
   try {
-    const r = await api('/api/compress/set', { method: 'POST', body: { keepRecent: n } });
+    const r = await api('/api/compress/set', { method: 'POST', body: { keepRecent: n, maxOutput: mo } });
     _compressEnabled = !!r.enabled;
     renderCompressToggle();
-    toast('已保存：保留最近 ' + r.keepRecent + ' 组', 'ok');
+    toast('已保存：保留 ' + r.keepRecent + ' 组，输出上限 ' + (r.maxOutput || '不限'), 'ok');
   } catch (err) {
     toast('保存失败：' + err.message, 'err');
   } finally {

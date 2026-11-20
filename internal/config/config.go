@@ -43,6 +43,18 @@ type Server struct {
 	HistoryCompress *bool `json:"historyCompress,omitempty"`
 	// CompressKeepRecent 是压缩时保留最近的工具调用组数，默认 6。
 	CompressKeepRecent *int `json:"compressKeepRecent,omitempty"`
+	// MaxOutputTokens 是输出 token 上限。0 表示不改写客户端请求。
+	// 设为正数时，请求里的 max_tokens / max_completion_tokens 会被封到这个值以内
+	// （只在客户端传得更大时才下调，不会把小的改大）。
+	MaxOutputTokens *int `json:"maxOutputTokens,omitempty"`
+}
+
+// MaxOutputCap 返回输出 token 上限，0 表示不限制。
+func (s *Server) MaxOutputCap() int {
+	if s.MaxOutputTokens == nil || *s.MaxOutputTokens <= 0 {
+		return 0
+	}
+	return *s.MaxOutputTokens
 }
 
 // HistoryCompressEnabled 返回历史压缩是否开启（未设置视为开启）。
