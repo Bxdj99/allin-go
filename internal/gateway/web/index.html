@@ -552,6 +552,7 @@
       主动问一次上游，明确区分「能用 / 额度用尽 / 需要重新登录」。
       打的是模型目录接口，<b>不消耗额度</b>。
     </div>
+    <div id="loginFlowBox" style="display:none;margin-bottom:12px"></div>
     <div id="probeBox" class="dim">点右上角「检测所有账号」开始</div>
   </div>
 
@@ -2725,23 +2726,37 @@ on('probeBox', 'click', async (e) => {
   const accountId = btn.dataset.account;
   btn.disabled = true;
   try {
-    const d = await api('/api/auth/' + vendor + '/start', {
-      method: 'POST',
-      body: { replaceAccountId: accountId },
-    });
-    if (!d.ok) throw new Error(d.error || '发起登录失败');
-    const url = d.url || '';
-    el('probeBox').insertAdjacentHTML('afterbegin',
-      '<div class="hint" style="margin-bottom:10px">' +
-      '正在重新登录 <b>' + esc(accountId) + '</b>，完成后会自动覆盖该账号。<br>' +
-      '请打开：<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(url) + '</a>' +
-      (d.hint ? '<br><span class="dim">' + esc(d.hint) + '</span>' : '') +
-      '</div>');
-    toast('已发起登录，请按提示完成授权', 'ok');
+    // 复用完整登录流程（含轮询与保存），只多带一个 replaceAccountId
+    await startAuthFlow(vendor, accountId);
   } catch (err) {
     toast('发起失败：' + err.message, 'err');
   } finally {
     btn.disabled = false;
+  }
+});
+
+// 授权页按钮：打开 / 复制
+on('loginFlowBox', 'click', async (e) => {
+  const openBtn = e.target.closest && e.target.closest('.btn-open-auth');
+  if (openBtn) {
+    window.open(openBtn.dataset.url, '_blank');
+    return;
+  }
+  const copyBtn = e.target.closest && e.target.closest('.btn-copy-auth');
+  if (copyBtn) {
+    const url = copyBtn.dataset.url;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('链接已复制', 'ok');
+    } catch (err) {
+      // http:// 下没有剪贴板 API，退回选中文本
+      const ta = document.createElement('textarea');
+      ta.value = url; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); toast('链接已复制', 'ok'); }
+      catch (e2) { toast('复制失败，请手动长按选择', 'err'); }
+      ta.remove();
+    }
   }
 });
 
@@ -2960,7 +2975,13 @@ async function createKey() {
   } catch (e) { toast(e.message, 'err'); }
 }
 
-function flowMsg(html) { el('flowMsg').innerHTML = html; }
+function flowMsg(html) {
+  // 重新登录时，状态消息要写进体检卡片里的那个容器，
+  // 否则用户在「账号」页看不到任何进度。
+  const target = (S.poll && S.poll.boxId === 'loginFlowBox') ? 'loginFlowBox' : 'flowMsg';
+  const box = el(target);
+  if (box) box.insertAdjacentHTML('beforeend', '<div style="margin-top:8px;font-size:12px">' + html + '</div>');
+}
 
 // WorkBuddy：向官方申请 state + authUrl → 用户手机号登录 → 轮询换 token
 async function startWorkBuddyFlow() {
@@ -3069,22 +3090,38 @@ const AUTH_LABELS = {
 
 function authLabel(v) { return AUTH_LABELS[v] || v; }
 
-async function startAuthFlow(vendor) {
+async function startAuthFlow(vendor, replaceAccountId) {
   stopPoll();
   const gen = S.poll.gen;
   const label = authLabel(vendor);
-  el('flowBox').innerHTML = '<div class="dim" style="font-size:12px">正在向 ' + esc(label) + ' 申请登录…</div>';
+  // 重新登录时把结果显示在体检卡片里（那个位置用户正看着），
+  // 普通登录仍用原来的 flowBox。
+  const boxId = replaceAccountId ? 'loginFlowBox' : 'flowBox';
+  const box = el(boxId);
+  if (replaceAccountId) {
+    box.style.display = 'block';
+  }
+  box.innerHTML = '<div class="dim" style="font-size:12px">正在向 ' + esc(label) + ' 申请登录…</div>';
+  S.poll.boxId = boxId;
+  const body = {};
+  if (replaceAccountId) body.replaceAccountId = replaceAccountId;
   try {
-    const d = await api('/api/auth/' + encodeURIComponent(vendor) + '/start', { method: 'POST', body: '{}' });
+    const d = await api('/api/auth/' + encodeURIComponent(vendor) + '/start', { method: 'POST', body: body });
     if (gen !== S.poll.gen) return;
     const deadlineAt = d.deadline ? d.deadline * 1000 : Date.now() + 600000;
     S.poll.deadlineAt = deadlineAt;
     S.poll.startedAt = Date.now();
-    el('flowBox').innerHTML = renderAuthStart(vendor, d, deadlineAt);
+    box.innerHTML = renderAuthStart(vendor, d, deadlineAt);
+    // 重新登录场景给一条醒目的说明，普通登录不打扰
+    if (replaceAccountId) {
+      box.insertAdjacentHTML('afterbegin',
+        '<div style="font-size:12px;margin-bottom:8px">正在重新登录 <b>' + esc(replaceAccountId) +
+        '</b>，完成后会自动覆盖该账号。若没有自动跳转，点下面的链接手动打开。</div>');
+    }
     bindAuthExtras(vendor, d, gen);
     schedulePoll(vendor, d, gen, Math.max(2000, d.intervalMs || 3000));
   } catch (e) {
-    el('flowBox').innerHTML = '<div class="err" style="font-size:12px">创建 ' + esc(label) +
+    box.innerHTML = '<div class="err" style="font-size:12px">创建 ' + esc(label) +
       ' 登录流失败：' + esc(e.message) + '</div>';
     toast(e.message, 'err');
   }
