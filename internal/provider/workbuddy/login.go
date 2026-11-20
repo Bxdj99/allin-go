@@ -3,6 +3,7 @@ package workbuddy
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -200,10 +201,12 @@ func PollLogin(ctx context.Context, flow *LoginFlow) (*LoginAccount, error) {
 		UID:            uid,
 		Name:           name,
 		Access:         access,
+		Refresh:        extractRefresh(token), // 之前漏了，导致账号无法自动续期
 		Domain:         hostOf(flow.Provider),
 		EnterpriseID:   ent,
 		EnterpriseName: wEnv.Data.EnterpriseName,
 		Email:          wEnv.Data.Email,
+		Expires:        jwtExpiryMillis(access),
 	}, nil
 }
 
@@ -252,6 +255,63 @@ func callJSON(ctx context.Context, method, endpoint string, headers map[string]s
 }
 
 // extractAccess 从各种可能的响应形状里挖出 access token。
+// extractRefresh 从 token 响应里取 refresh token。
+//
+// 上游会下发 refreshToken（或 refresh_token），但之前只提取了 access，
+// refresh 被丢弃 —— 后果是账号永远没有续期能力，只能等着 401 后重新登录。
+func extractRefresh(raw []byte) string {
+	var outer struct {
+		Refresh      string `json:"refresh"`
+		RefreshToken string `json:"refreshToken"`
+		Data         struct {
+			Refresh      string `json:"refresh"`
+			RefreshToken string `json:"refreshToken"`
+			RefreshTk    string `json:"refresh_token"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &outer) != nil {
+		return ""
+	}
+	for _, cand := range []string{
+		outer.Data.Refresh, outer.Data.RefreshToken, outer.Data.RefreshTk,
+		outer.Refresh, outer.RefreshToken,
+	} {
+		if v := strings.TrimSpace(cand); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// extractRefreshExpires 取 refresh token 自己的过期时间（毫秒）。
+func extractRefreshExpires(raw []byte) int64 {
+	var outer struct {
+		RefreshExpiresAt int64 `json:"refreshExpiresAt"`
+		RefreshExpiresIn int64 `json:"refreshExpiresIn"`
+		Data             struct {
+			RefreshExpiresAt int64 `json:"refreshExpiresAt"`
+			RefreshExpiresIn int64 `json:"refreshExpiresIn"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &outer) != nil {
+		return 0
+	}
+	now := time.Now().UnixMilli()
+	if v := outer.Data.RefreshExpiresAt; v > 0 {
+		return v
+	}
+	if v := outer.Data.RefreshExpiresIn; v > 0 {
+		return now + v*1000
+	}
+	if v := outer.RefreshExpiresAt; v > 0 {
+		return v
+	}
+	if v := outer.RefreshExpiresIn; v > 0 {
+		return now + v*1000
+	}
+	return 0
+}
+
 func extractAccess(raw []byte, data any) string {
 	// 先试 data 是对象
 	var outer struct {
@@ -296,3 +356,31 @@ func newUUIDLike() string {
 
 // HTTPClient 由 provider 包在 init 时注入带内置 CA 的 Transport。
 var HTTPClient = &http.Client{Timeout: 30 * time.Second, Transport: http.DefaultTransport}
+
+// jwtExpiryMillis 从 JWT 的 exp 解出过期时间（毫秒）；解不出返回 0。
+//
+// 上游不一定在响应里给 expires，但 access token 本身是 JWT，
+// 取 exp 就能知道什么时候该刷新。
+func jwtExpiryMillis(token string) int64 {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return 0
+	}
+	p := parts[1]
+	p = strings.ReplaceAll(p, "-", "+")
+	p = strings.ReplaceAll(p, "_", "/")
+	for len(p)%4 != 0 {
+		p += "="
+	}
+	dec, err := base64.StdEncoding.DecodeString(p)
+	if err != nil {
+		return 0
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if json.Unmarshal(dec, &claims) != nil || claims.Exp <= 0 {
+		return 0
+	}
+	return claims.Exp * 1000
+}

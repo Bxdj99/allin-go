@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"log"
+	"strings"
 	"time"
 
 	"allin/internal/config"
@@ -9,6 +11,7 @@ import (
 	"allin/internal/provider/codex"
 	"allin/internal/provider/copilot"
 	"allin/internal/provider/minimax"
+	"allin/internal/provider/workbuddy"
 )
 
 // 各家 token 刷新的适配层。
@@ -91,9 +94,37 @@ func (s *Server) refreshMiniMax(ctx context.Context, a *config.Account) error {
 //
 // 到期后的正确做法：让用户在面板重新登录一次。
 func (s *Server) refreshWorkBuddy(ctx context.Context, a *config.Account) error {
-	// 标记为需要重新登录，面板会显示醒目提示
-	if a.Expires > 0 && a.Expires < time.Now().UnixMilli() {
-		a.CheckinOutcome = "token_expired"
+	if a == nil {
+		return errSkipRefresh
 	}
-	return errSkipRefresh
+	// 没有 refresh 就真的没法续期 —— 这才需要用户重新登录。
+	if strings.TrimSpace(a.Refresh) == "" {
+		if a.Expires > 0 && a.Expires < time.Now().UnixMilli() {
+			a.CheckinOutcome = "token_expired"
+		}
+		return errSkipRefresh
+	}
+
+	// 判断供应商是国际站还是国内站
+	provID := "workbuddy"
+	if strings.EqualFold(a.Realm, "global") {
+		provID = "workbuddy-ai"
+	}
+
+	res, err := workbuddy.RefreshAccount(ctx, provID, a.Access, a.Refresh, a.Domain)
+	if err != nil {
+		return err
+	}
+
+	oldAccess := a.Access
+	a.Access = res.Access
+	if res.Refresh != "" {
+		// 上游可能轮换 refresh，有新的就用新的
+		a.Refresh = res.Refresh
+	}
+	if res.Expires > 0 {
+		a.Expires = res.Expires
+	}
+	log.Printf("WorkBuddy 续期成功: %s（access 变化=%v）", a.ID, oldAccess != res.Access)
+	return nil
 }

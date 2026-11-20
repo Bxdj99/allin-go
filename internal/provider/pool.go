@@ -28,6 +28,11 @@ type acctState struct {
 	lastFailure string
 	successes   int64
 
+	// needRelogin 表示凭据已被上游判死（连续多次 401 且本地没有 refresh）。
+	// 这种账号不会再被选中，面板上要明确标出来让用户重新登录，
+	// 否则用户只会看到「冷却中」，以为是临时限流。
+	needRelogin bool
+
 	// 积分快照：由后台刷新任务灌入，Pick 只读，绝不在此触发网络请求。
 	creditsAt   time.Time // 快照时间，零值表示从未刷新过
 	remaining   float64   // 当前可用余额
@@ -342,6 +347,7 @@ func (p *Pool) Success(pid, aid string) {
 	st.failures = 0
 	st.coolUntil = time.Time{}
 	st.lastFailure = ""
+	st.needRelogin = false
 	st.successes++
 	st.lastUsed = time.Now()
 }
@@ -379,12 +385,28 @@ func (p *Pool) Fail(pid, aid string, status int, reason string) {
 	// 界面上永远显示「冷却中」却永远恢复不了，用户也看不出是死号。
 	if (status == 401 || status == 403) && st.failures >= 3 {
 		st.coolUntil = time.Now().Add(coolDeadCredential)
+		st.needRelogin = true
 		return
 	}
 	st.coolUntil = time.Now().Add(cool * time.Duration(mult))
 }
 
 // Reset 清空某个账号的冷却状态。
+// MarkNeedRelogin 供检测接口在确认账号失效时打标。
+func (p *Pool) MarkNeedRelogin(pid, aid string, on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st := p.state[key(pid, aid)]
+	if st == nil {
+		st = &acctState{}
+		p.state[key(pid, aid)] = st
+	}
+	st.needRelogin = on
+	if on {
+		st.coolUntil = time.Now().Add(coolDeadCredential)
+	}
+}
+
 func (p *Pool) Reset(pid, aid string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -412,6 +434,9 @@ func (p *Pool) Snapshot() []map[string]any {
 		}
 		if st.lastFailure != "" {
 			row["lastFailure"] = st.lastFailure
+		}
+		if st.needRelogin {
+			row["needRelogin"] = true
 		}
 		if !st.creditsAt.IsZero() {
 			row["creditsRemaining"] = st.remaining
@@ -482,4 +507,12 @@ func (p *Pool) pickLeastLoaded(prov *config.Provider, exclude map[string]bool) *
 		return best
 	}
 	return fallback
+}
+
+// NeedRelogin 返回某账号是否已被标记为「需要重新登录」。
+func (p *Pool) NeedRelogin(pid, aid string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st := p.state[key(pid, aid)]
+	return st != nil && st.needRelogin
 }

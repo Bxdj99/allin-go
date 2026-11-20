@@ -547,6 +547,15 @@
   </div>
 
   <div class="card">
+    <h2>账号体检 <button class="btn sm primary" id="btnProbeAccounts" style="margin-left:auto">检测所有账号</button></h2>
+    <div class="dim" style="font-size:12px;margin-bottom:10px">
+      主动问一次上游，明确区分「能用 / 额度用尽 / 需要重新登录」。
+      打的是模型目录接口，<b>不消耗额度</b>。
+    </div>
+    <div id="probeBox" class="dim">点右上角「检测所有账号」开始</div>
+  </div>
+
+  <div class="card">
     <h2>账号池健康 <button class="btn sm" id="btnPool" style="margin-left:auto">刷新</button></h2>
     <div id="poolBox" class="dim">点「刷新」查看成功/失败/冷却情况</div>
   </div>
@@ -2692,6 +2701,91 @@ on('btnRaccoonToken', 'click', async (e) => {
   } catch (err) {
     el('raccoonTokenMsg').innerHTML = '<span class="err">' + esc(err.message) + '</span>';
     toast('添加失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* ===================== 账号体检 ===================== */
+
+const PROBE_LABEL = {
+  'ok': ['可用', 'ok'],
+  'no-credit': ['额度用尽', 'warn'],
+  'relogin': ['需重新登录', 'err'],
+  'disabled': ['已禁用', 'dim'],
+  'skip': ['无凭据', 'dim'],
+  'error': ['检测失败', 'warn'],
+};
+
+// 体检结果里的「重新登录」按钮：发起登录流，并把要覆盖的账号 ID 带过去
+on('probeBox', 'click', async (e) => {
+  const btn = e.target.closest && e.target.closest('.btn-relogin');
+  if (!btn) return;
+  const vendor = btn.dataset.vendor;
+  const accountId = btn.dataset.account;
+  btn.disabled = true;
+  try {
+    const d = await api('/api/auth/' + vendor + '/start', {
+      method: 'POST',
+      body: { replaceAccountId: accountId },
+    });
+    if (!d.ok) throw new Error(d.error || '发起登录失败');
+    const url = d.url || '';
+    el('probeBox').insertAdjacentHTML('afterbegin',
+      '<div class="hint" style="margin-bottom:10px">' +
+      '正在重新登录 <b>' + esc(accountId) + '</b>，完成后会自动覆盖该账号。<br>' +
+      '请打开：<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(url) + '</a>' +
+      (d.hint ? '<br><span class="dim">' + esc(d.hint) + '</span>' : '') +
+      '</div>');
+    toast('已发起登录，请按提示完成授权', 'ok');
+  } catch (err) {
+    toast('发起失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+on('btnProbeAccounts', 'click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  el('probeBox').innerHTML = '<span class="dim">正在逐个检测（最多几十秒）…</span>';
+  try {
+    const d = await api('/api/accounts/probe', { method: 'POST', body: {} });
+    const rows = d.rows || [];
+    if (!rows.length) { el('probeBox').innerHTML = '<span class="dim">没有账号</span>'; return; }
+
+    const summary = [];
+    summary.push('共 <b>' + d.total + '</b> 个');
+    summary.push('可用 <b style="color:#22c55e">' + d.usable + '</b>');
+    if (d.relogin) summary.push('需重登 <b style="color:#ef4444">' + d.relogin + '</b>');
+    if (d.noCredit) summary.push('额度尽 <b style="color:#f59e0b">' + d.noCredit + '</b>');
+
+    const body = rows.map((r) => {
+      const [label, cls] = PROBE_LABEL[r.status] || [r.status, ''];
+      // 需要重新登录的账号，直接给一个按钮，把 vendor 与要覆盖的账号 ID 带上
+      let action = '';
+      if (r.status === 'relogin') {
+        const vendor = (r.providerId || '').startsWith('workbuddy') ? 'workbuddy' : r.providerId;
+        action = '<button class="btn sm primary btn-relogin" data-vendor="' + esc(vendor) +
+          '" data-account="' + esc(r.accountId) + '">重新登录</button>';
+      }
+      return '<tr>' +
+        '<td style="font-size:11px">' + esc(r.providerId) + '</td>' +
+        '<td>' + esc(r.name || r.accountId) + '</td>' +
+        '<td class="' + cls + '">' + esc(label) + '</td>' +
+        '<td style="font-size:11px">' + esc(r.detail || '') + '</td>' +
+        '<td>' + action + '</td>' +
+        '</tr>';
+    }).join('');
+
+    el('probeBox').innerHTML =
+      '<div style="margin-bottom:8px">' + summary.join('　') + '</div>' +
+      '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">' +
+      '<thead><tr style="text-align:left;opacity:.6"><th>供应商</th><th>账号</th><th>状态</th><th>说明</th><th>操作</th></tr></thead>' +
+      '<tbody>' + body + '</tbody></table></div>';
+    await loadProviders();
+  } catch (err) {
+    el('probeBox').innerHTML = '<span class="err">检测失败：' + esc(err.message) + '</span>';
   } finally {
     btn.disabled = false;
   }

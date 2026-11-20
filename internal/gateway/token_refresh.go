@@ -68,13 +68,14 @@ func (s *Server) refreshExpiringTokens(ctx context.Context) {
 			if a == nil || !a.IsEnabled() || a.Refresh == "" {
 				continue
 			}
-			// Expires 为 0 表示上游没给，跳过（没法判断何时该刷）
-			if a.Expires <= 0 {
-				continue
-			}
-			// 还没到提前刷新窗口就跳过
-			if a.Expires-now > tokenRefreshLead.Milliseconds() {
-				continue
+			// Expires 为 0 也可能是因为老配置没存过期时间。
+			// 这种情况不能直接跳过：token 可能已经失效，
+			// 交给 pool 的 needRelogin 标记判断该不该刷。
+			if a.Expires > 0 && a.Expires-now > tokenRefreshLead.Milliseconds() {
+				// 还没到提前刷新窗口，但如果已标记需重登，仍要尝试续期
+				if !s.pool.NeedRelogin(p.ID, a.ID) {
+					continue
+				}
 			}
 			if err := s.refreshOne(ctx, p, a); err == nil {
 				changed = true

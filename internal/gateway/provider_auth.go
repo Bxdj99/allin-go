@@ -167,6 +167,11 @@ type authFlow struct {
 	interval time.Duration
 	hint     string
 
+	// replaceID 是「重新登录」时指定要覆盖的旧账号 ID。
+	// 登录拿到的新账号 ID 可能和旧的拼法不同（比如按邮箱/UID 重新生成），
+	// 只靠 ID/UID 匹配可能覆盖不到，导致账号池里留下一个死号。
+	replaceID string
+
 	ag *antigravity.Flow
 	cp *catpaw.Flow
 	cl *cline.DeviceFlow
@@ -317,6 +322,12 @@ func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request, vendor 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
+	// 重新登录：请求可带 replaceAccountId，指定要覆盖的旧账号。
+	var startIn struct {
+		ReplaceAccountID string `json:"replaceAccountId"`
+	}
+	_ = decodeJSON(r, &startIn)
+
 	flow, payload, err := startAuthFlow(ctx, vendor)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
@@ -328,6 +339,7 @@ func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request, vendor 
 	authFlows[flowID] = flow
 	authFlowsMu.Unlock()
 
+	flow.replaceID = strings.TrimSpace(startIn.ReplaceAccountID)
 	payload["ok"] = true
 	payload["flowId"] = flowID
 	payload["vendor"] = vendor
@@ -408,7 +420,7 @@ func (s *Server) handleAuthPoll(w http.ResponseWriter, r *http.Request, vendor s
 		authFlowsMu.Unlock()
 		flow.closeWaiter()
 
-		if err := s.saveAuthAccount(vendor, done.acc, done.models); err != nil {
+		if err := s.saveAuthAccountReplacing(vendor, done.acc, done.models, flow.replaceID); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{
 				"ok": false, "status": "failed", "provider": flow.provider,
 				"error": "登录成功但保存配置失败: " + err.Error(),
@@ -970,8 +982,16 @@ func wenxinDone(a *wenxin.Account) *authDone {
 
 // ---------- 写配置 ----------
 
-// saveAuthAccount 把登录得到的账号写进配置；供应商不存在就按默认值新建。
+// saveAuthAccount 把登录得到的账号写进配置（不指定替换目标）。
 func (s *Server) saveAuthAccount(vendor string, a *config.Account, models []string) error {
+	return s.saveAuthAccountReplacing(vendor, a, models, "")
+}
+
+// saveAuthAccountReplacing 是带「指定替换旧账号」的版本。
+//
+// replaceID 非空时，先把该 ID 的旧账号从池里摘掉再写入新账号，
+// 这样即便新旧账号 ID 拼法不同，也不会留下一个永远 401 的死号。
+func (s *Server) saveAuthAccountReplacing(vendor string, a *config.Account, models []string, replaceID string) error {
 	v, ok := authVendors[vendor]
 	if !ok {
 		return fmt.Errorf("未知供应商: %s", vendor)
@@ -996,6 +1016,17 @@ func (s *Server) saveAuthAccount(vendor string, a *config.Account, models []stri
 		}
 		cfg.Providers = append(cfg.Providers, p)
 	}
+	// 指定了替换目标：先按 ID 摘掉旧账号（新账号稍后写入）
+	if replaceID != "" {
+		kept := make([]*config.Account, 0, len(p.Accounts))
+		for _, old := range p.Accounts {
+			if old != nil && old.ID == replaceID {
+				continue
+			}
+			kept = append(kept, old)
+		}
+		p.Accounts = kept
+	}
 	// 同一账号（ID 相同或 UID 相同）重复登录就覆盖，避免账号池里堆重复项
 	replaced := false
 	for i, old := range p.Accounts {
@@ -1015,7 +1046,14 @@ func (s *Server) saveAuthAccount(vendor string, a *config.Account, models []stri
 	if len(p.Models) == 0 && len(models) > 0 {
 		p.Models = append([]string(nil), models...)
 	}
-	return s.store.Save(cfg)
+	if err := s.store.Save(cfg); err != nil {
+		return err
+	}
+	// 重新登录成功后，把账号池里的「需重新登录」标记和冷却一并清掉，
+	// 否则新 token 已经能用，选号逻辑却还把它当死号排除。
+	s.pool.MarkNeedRelogin(p.ID, a.ID, false)
+	s.pool.Reset(p.ID, a.ID)
+	return nil
 }
 
 // ---------- 杂项 ----------
