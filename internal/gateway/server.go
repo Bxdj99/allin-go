@@ -495,6 +495,13 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 			tried[acct.ID] = true
 			uc.accountID = acct.ID // 按账号记积分消耗
 
+			// 注入 prompt_cache_key —— 省积分的关键一步。
+			// 实测不带它时上游无法复用前缀缓存，credit 约是带它的 17 倍。
+			// 用账号 uid 做隔离段，保证不会命中别的账号的缓存。
+			if kind == provider.KindWorkBuddy {
+				stepBody = workbuddy.InjectPromptCacheKey(stepBody, acct.UID, sessKey)
+			}
+
 			upreq, err := provider.BuildRequest(kind, stepBase, apiPath, acct.Key(), acct, stepBody, sp.Headers)
 			if err != nil {
 				s.fail(w, http.StatusInternalServerError, "构造上游请求失败: "+err.Error())

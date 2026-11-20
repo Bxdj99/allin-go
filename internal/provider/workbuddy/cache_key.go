@@ -1,0 +1,86 @@
+package workbuddy
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"strings"
+)
+
+// prompt_cache_key 注入 —— 这是最直接的省钱手段。
+//
+// 逆向实测（WorkBuddy2API 项目 buddy-adapter.ts:706-714）：
+// 同一段 8k token 前缀发两次
+//
+//	不带 prompt_cache_key → prompt_cache_hit_tokens=0      credit≈0.34
+//	带   prompt_cache_key → prompt_cache_hit_tokens=7808   credit≈0.02
+//
+// 积分消耗相差约 17 倍。原因是不带 key 时上游无法把连续请求归到同一会话，
+// 每次都按全量 prompt 计费。
+//
+// 我们之前完全没注入这个字段，这就是「同样用量，别的网关更省」的直接原因。
+
+// InjectPromptCacheKey 给请求体加上 prompt_cache_key。
+//
+// 优先级：
+//  1. 客户端已带 prompt_cache_key → 原样保留，不覆盖
+//  2. body 里的 conversation_id / conversationId 作为会话源
+//  3. 都没有 → 用传入的 sessionKey（网关按对话内容算出的指纹）
+//
+// 账号隔离是硬要求：key 里编入账号 uid 前缀，避免命中别的账号的前缀缓存。
+// 跨账号复用同一 key 会读到对方对话，既是费用问题也是安全问题。
+func InjectPromptCacheKey(body []byte, uid, sessionKey string) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return body // 坏 body 不动，避免二次错误化
+	}
+
+	// 1) 客户端自带的，尊重它
+	if v, ok := obj["prompt_cache_key"].(string); ok && strings.TrimSpace(v) != "" {
+		return body
+	}
+
+	// 2) body 内的会话标识优先于网关推断
+	conv := sessionKey
+	if v := strField(obj, "conversation_id"); v != "" {
+		conv = v
+	} else if v := strField(obj, "conversationId"); v != "" {
+		conv = v
+	}
+
+	obj["prompt_cache_key"] = buildCacheKey(uid, conv)
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// buildCacheKey 生成 `<uid8>-<convHex>` 形式的稳定 key。
+//
+// uid8 提供账号隔离；convHex 由 uid+会话源哈希而来，保证：
+//   - 同账号同会话 → 稳定（能命中缓存）
+//   - 不同会话 → 不同（不会错误复用）
+//   - 跨账号 → 绝不碰撞
+func buildCacheKey(uid, conversation string) string {
+	uid8 := uid
+	if len(uid8) > 8 {
+		uid8 = uid8[:8]
+	}
+	if uid8 == "" {
+		uid8 = "-"
+	}
+	sum := sha256.Sum256([]byte(uid + "|" + conversation))
+	return "allin-" + uid8 + "-" + hex.EncodeToString(sum[:16])
+}
+
+func strField(obj map[string]any, key string) string {
+	v, ok := obj[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(v)
+}
