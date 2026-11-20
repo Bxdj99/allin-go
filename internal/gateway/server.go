@@ -81,6 +81,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/providers/models/expose", s.withAuth(s.handleProviderExpose))
 	s.mux.HandleFunc("/api/accounts/write", s.withAuth(s.handleAccountWrite))
 	// 日志页：采样查询、总开关、清空
+	// 历史压缩设置
+	s.mux.HandleFunc("/api/compress", s.withAuth(s.handleCompressGet))
+	s.mux.HandleFunc("/api/compress/set", s.withAuth(s.handleCompressSet))
 	s.mux.HandleFunc("/api/logs", s.withAuth(s.handleLogs))
 	s.mux.HandleFunc("/api/logs/toggle", s.withAuth(s.handleLogsToggle))
 	s.mux.HandleFunc("/api/logs/clear", s.withAuth(s.handleLogsClear))
@@ -359,6 +362,23 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		} else {
 			log.Printf("WorkBuddy 请求预处理失败（按原样发送）: %v", perr)
 		}
+		// 历史压缩：把较早的工具调用组换成摘要。
+		//
+		// 放在裁剪之前：压缩通常是「无损」的——模型仍看得到调用过什么工具、
+		// 返回了多大结果，只是看不到原始内容。多数长会话压完就落回阈值内，
+		// 不需要裁剪，也就不会丢掉开头的任务目标。
+		if cfg.Server.HistoryCompressEnabled() {
+			opts := workbuddy.CompressOptions{
+				KeepRecentGroups: cfg.Server.CompressKeepRecentGroups(),
+				MinGroupChars:    2000,
+			}
+			if compressed, n := workbuddy.CompressHistoryWith(upstreamBody, opts); n > 0 {
+				log.Printf("历史压缩：%d 组工具调用已摘要（%d → %d 字节）",
+					n, len(upstreamBody), len(compressed))
+				upstreamBody = compressed
+			}
+		}
+
 		// 上下文裁剪：先按默认阈值裁一次。
 		// 若上游仍嫌大（见下面的续写逻辑），会用更小预算重裁。
 		// 保留裁剪前快照，续写时从它出发，避免在已裁过的产物上二次裁导致越裁越碎。

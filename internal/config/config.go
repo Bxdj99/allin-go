@@ -35,6 +35,27 @@ type Server struct {
 	// 关闭后：不写 gateway.log（所有 log.Printf 静默），
 	// 也不采集「日志」页的请求样本，内存里已有的样本一并清掉。
 	LogCapture *bool `json:"logCapture,omitempty"`
+	// HistoryCompress 是历史压缩开关。默认开启。
+	//
+	// 开启后会把较早的工具调用组摘要成一行，显著减小请求体。
+	// 但它会改变 prompt 前缀，可能降低上游缓存命中率，
+	// 极端情况下反而更费积分——所以留了开关让用户自己权衡。
+	HistoryCompress *bool `json:"historyCompress,omitempty"`
+	// CompressKeepRecent 是压缩时保留最近的工具调用组数，默认 6。
+	CompressKeepRecent *int `json:"compressKeepRecent,omitempty"`
+}
+
+// HistoryCompressEnabled 返回历史压缩是否开启（未设置视为开启）。
+func (s *Server) HistoryCompressEnabled() bool {
+	return s.HistoryCompress == nil || *s.HistoryCompress
+}
+
+// CompressKeepRecentGroups 返回保留的近期工具组数，默认 6。
+func (s *Server) CompressKeepRecentGroups() int {
+	if s.CompressKeepRecent == nil || *s.CompressKeepRecent <= 0 {
+		return 6
+	}
+	return *s.CompressKeepRecent
 }
 
 // LogCaptureEnabled 返回日志采样是否开启（未设置视为开启）。

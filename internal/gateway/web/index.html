@@ -557,6 +557,28 @@
   </div>
 
   <div class="card">
+    <h2>历史压缩</h2>
+    <div class="dim" style="font-size:12px;margin-bottom:10px">
+      开启后，较早的工具调用（读文件、跑命令等）会被摘要成一行，
+      只保留「调过什么、返回多大」，正文省略。
+    </div>
+    <div class="hint" style="margin-bottom:12px">
+      <b>有得有失：</b>压缩能显著减小请求体，长会话更省 token；<br>
+      但它改变了 prompt 前缀，<b>可能降低上游缓存命中率</b>，极端情况下反而更费积分或更慢。<br>
+      默认开启。如果你更在意稳定性与缓存命中，可以关掉。最近几轮的工具调用始终保留原文。
+    </div>
+    <div class="field">
+      <label>保留最近的工具调用组数（越大越保守）</label>
+      <input id="fKeepRecent" type="number" min="0" max="200" value="6" style="width:120px">
+    </div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnCompressToggle">开启压缩</button>
+      <button class="btn" id="btnCompressSave">保存保留组数</button>
+      <span class="dim" id="compressState" style="font-size:12px"></span>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>首字延迟统计</h2>
     <div id="logSummary" class="dim">点「刷新」加载</div>
     <div class="hint" style="margin-top:10px">
@@ -2436,6 +2458,7 @@ function msClass(v) {
 }
 
 async function loadLogs() {
+  await loadCompress();
   try {
     const d = await api('/api/logs?limit=100');
     _logsEnabled = !!d.enabled;
@@ -2514,6 +2537,67 @@ function renderLogSamples(list) {
     '<th>时间</th><th>模型</th><th>账号</th><th>总耗时</th><th>上游</th><th>网关开销</th><th>状态</th><th>重试</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
+
+/* ===================== 历史压缩 ===================== */
+
+let _compressEnabled = true;
+
+async function loadCompress() {
+  try {
+    const d = await api('/api/compress');
+    _compressEnabled = !!d.enabled;
+    el('fKeepRecent').value = d.keepRecent != null ? d.keepRecent : 6;
+    renderCompressToggle();
+  } catch (e) {
+    el('compressState').innerHTML = '<span class="err">加载失败：' + esc(e.message) + '</span>';
+  }
+}
+
+function renderCompressToggle() {
+  const b = el('btnCompressToggle');
+  if (!b) return;
+  if (_compressEnabled) {
+    b.textContent = '关闭压缩';
+    b.className = 'btn';
+    el('compressState').innerHTML = '<span style="color:#22c55e">● 已开启</span>（较早的工具调用会被摘要）';
+  } else {
+    b.textContent = '开启压缩';
+    b.className = 'btn primary';
+    el('compressState').innerHTML = '<span class="dim">○ 已关闭</span>（全部历史原样发送，缓存命中更稳定）';
+  }
+}
+
+on('btnCompressToggle', 'click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const r = await api('/api/compress/set', { method: 'POST', body: { enabled: !_compressEnabled } });
+    _compressEnabled = !!r.enabled;
+    renderCompressToggle();
+    toast(_compressEnabled ? '已开启历史压缩' : '已关闭历史压缩', 'ok');
+  } catch (err) {
+    toast('切换失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+on('btnCompressSave', 'click', async (e) => {
+  const btn = e.currentTarget;
+  const n = parseInt(el('fKeepRecent').value, 10);
+  if (isNaN(n) || n < 0 || n > 200) { toast('保留组数需在 0-200 之间', 'err'); return; }
+  btn.disabled = true;
+  try {
+    const r = await api('/api/compress/set', { method: 'POST', body: { keepRecent: n } });
+    _compressEnabled = !!r.enabled;
+    renderCompressToggle();
+    toast('已保存：保留最近 ' + r.keepRecent + ' 组', 'ok');
+  } catch (err) {
+    toast('保存失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 on('btnLogToggle', 'click', async (e) => {
   const btn = e.currentTarget;
