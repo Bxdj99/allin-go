@@ -31,12 +31,17 @@ func TestEstimateCatchesLargeAgentRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("裁剪报错: %v", err)
 	}
-	t.Logf("估算 %d tokens，丢弃 %d 条，trimmed=%v", res.Estimated, res.Dropped, res.Trimmed)
-	if !res.Trimmed {
-		t.Fatal("这种规模的请求必须触发裁剪，否则上游会 400")
-	}
-	if res.Estimated > maxPromptTokens {
+	t.Logf("估算 %d tokens（阈值 %d），丢弃 %d 条，trimmed=%v",
+		res.Estimated, maxPromptTokens, res.Dropped, res.Trimmed)
+
+	// 阈值放宽到 950k 后，这个规模（约 65 万 token）本来就该原样通过，
+	// 不该再被裁。硬上限是 1048576，留了 10% 余量。
+	if res.Trimmed && res.Estimated > maxPromptTokens {
 		t.Fatalf("裁剪后仍超阈值: %d > %d", res.Estimated, maxPromptTokens)
+	}
+	// 真正要保证的是：产物不超上游硬上限
+	if res.Estimated > 1_048_576 {
+		t.Fatalf("超过上游硬上限: %d", res.Estimated)
 	}
 }
 
@@ -68,8 +73,8 @@ func TestTrimKeepsOpeningAnchor(t *testing.T) {
 		{"role": "assistant", "content": "好的"},
 	}
 	// 中间塞大量内容把它挤出最近窗口
-	big := strings.Repeat("z", 1200)
-	for i := 0; i < 1200; i++ {
+	big := strings.Repeat("z", 3000)
+	for i := 0; i < 3000; i++ {
 		msgs = append(msgs, map[string]any{"role": "user", "content": big})
 	}
 	msgs = append(msgs, map[string]any{"role": "user", "content": "继续"})
