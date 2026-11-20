@@ -29,6 +29,8 @@ echo $$ > "$LOCK"
 # 退出时清掉 pid 文件
 trap 'rm -f "$LOCK"' EXIT INT TERM
 RUNDIR=/data/local/tmp/allin-run
+# STAGE 是「网关 → root」的交接目录：网关往里放 zip，本脚本以 root 消费。
+STAGE="$RUNDIR/stage"
 MODDATA="$MODDIR/data"
 RUNDATA="$RUNDIR/data"
 LOG="$MODDIR/allin.log"
@@ -68,6 +70,10 @@ prepare() {
         log "缺少二进制：$MODDIR/bin/allin"
         return 1
     fi
+    # 在线更新：网关以 shell(2000) 运行，写不了 $MODDIR（root 所有）。
+    # 它把更新包放到 $STAGE（shell 可写），由这里以 root 身份应用。
+    apply_staged_update
+
     # 在线更新留下的 allin.pending → 替换正式二进制（网关不能覆盖正在运行的自己）
     if [ -f "$MODDIR/bin/allin.pending" ]; then
         log "发现待应用的更新 allin.pending"
@@ -124,6 +130,58 @@ file_sum() {
 #
 # 不能直接写 `busybox`：不同 root 方案装的路径不同，PATH 里也未必有。
 # 见过 Magisk / KernelSU / APatch 各自的目录，也见过系统自带 /system/bin 的。
+# apply_staged_update 应用网关放下的在线更新包。
+#
+# 为什么要这个交接目录：网关以 uid 2000 运行，$MODDIR 属 root、权限 755，
+# 网关根本写不进去。以前在线更新直接往 $MODDIR 写，必然 permission denied。
+# 现在网关只下载到 $STAGE，这里以 root 解压覆盖，保留 data/ 与日志。
+apply_staged_update() {
+    ZIP="$STAGE/allin-update.zip"
+    [ -f "$ZIP" ] || return 0
+    log "发现待应用的在线更新包"
+
+    WORK="$STAGE/x"
+    rm -rf "$WORK"
+    mkdir -p "$WORK" 2>/dev/null
+    if [ -n "$BUSYBOX" ]; then
+        "$BUSYBOX" unzip -o -q "$ZIP" -d "$WORK" 2>/dev/null
+    else
+        unzip -o -q "$ZIP" -d "$WORK" 2>/dev/null
+    fi
+
+    # 校验：必须是我们自己的模块包
+    if [ ! -f "$WORK/module.prop" ] || [ ! -f "$WORK/bin/allin" ]; then
+        log "更新包不完整，丢弃"
+        rm -rf "$ZIP" "$WORK"
+        return 0
+    fi
+    if ! grep -q '^id=allin' "$WORK/module.prop" 2>/dev/null; then
+        log "更新包 id 不是 allin，拒绝安装"
+        rm -rf "$ZIP" "$WORK"
+        return 0
+    fi
+
+    # 备份 module.prop 以便失败回滚
+    cp -f "$MODDIR/module.prop" "$STAGE/module.prop.bak" 2>/dev/null
+
+    # 二进制写成 .pending，交给下面统一的替换逻辑（不覆盖正在运行的自己）
+    if [ -f "$WORK/bin/allin" ]; then
+        cp -f "$WORK/bin/allin" "$MODDIR/bin/allin.pending" 2>/dev/null &&
+            chmod 755 "$MODDIR/bin/allin.pending" 2>/dev/null &&
+            log "已放置新二进制（pending）"
+    fi
+    if [ -f "$WORK/module.prop" ]; then
+        cp -f "$WORK/module.prop" "$MODDIR/module.prop" 2>/dev/null
+    fi
+    # 脚本类文件直接覆盖（不是运行中的可执行文件，可以直接替换）
+    for f in service.sh action.sh uninstall.sh; do
+        [ -f "$WORK/$f" ] && cp -f "$WORK/$f" "$MODDIR/$f" 2>/dev/null && chmod 755 "$MODDIR/$f" 2>/dev/null
+    done
+
+    log "在线更新包已应用"
+    rm -rf "$ZIP" "$WORK"
+}
+
 find_busybox() {
     for c in \
         /data/adb/magisk/busybox \

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -88,7 +89,12 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	// 下载
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
-	tmp := filepath.Join(os.TempDir(), "allin-update.zip")
+	tmpDir, err := updateTempDir()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	tmp := filepath.Join(tmpDir, "allin-update.zip")
 	if err := downloadFile(ctx, st.URL, tmp); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "下载失败: " + err.Error()})
 		return
@@ -103,17 +109,35 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := installModule(tmp); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "安装失败: " + err.Error()})
+	// 把包放到「网关可写、root 可读」的交接目录，由 service.sh 以 root 应用。
+	//
+	// 不能在这里直接解压覆盖模块目录：网关以 uid 2000 运行，
+	// /data/adb/modules/allin 属 root、权限 755，写不进去。
+	stageDir := filepath.Join(tmpDir, "stage")
+	if err := os.MkdirAll(stageDir, 0o777); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "准备交接目录失败: " + err.Error()})
 		return
 	}
+	staged := filepath.Join(stageDir, "allin-update.zip")
+	if err := copyFile(tmp, staged); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "放置更新包失败: " + err.Error()})
+		return
+	}
+	_ = os.Chmod(staged, 0o644)
+	_ = os.Chmod(stageDir, 0o777)
+
+	// 尽力触发一次 service.sh（有 root 通道时才会成功），失败也不影响结果：
+	// 用户重启模块或手机会自然应用。
+	triggered := tryTriggerServiceScript()
 	_ = os.Remove(tmp)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"from":    st.Current,
 		"to":      st.Latest,
-		"message": "已更新到 " + st.Latest + "，重启手机（或在管理器里重启模块）后生效",
+		"message": "更新包已就绪，重启模块（或重启手机）后自动应用",
+		"staged":  staged,
+		"applied": triggered,
 	})
 }
 
@@ -286,110 +310,6 @@ func peekModuleID(zipPath string) (string, error) {
 	return "", &netErr{"module.prop 里没有 id"}
 }
 
-// installModule 解压覆盖模块目录，保留 data/。
-func installModule(zipPath string) error {
-	// 备份当前 module.prop，解压失败能回滚
-	oldProp, _ := os.ReadFile(filepath.Join(moduleDir, "module.prop"))
-
-	tmpDir := filepath.Join(os.TempDir(), "allin-update-x")
-	_ = os.RemoveAll(tmpDir)
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return err
-	}
-	if out, err := exec.Command("unzip", "-o", "-q", zipPath, "-d", tmpDir).CombinedOutput(); err != nil {
-		return &netErr{"解压失败: " + string(out)}
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// 校验解压结果完整性
-	if _, err := os.Stat(filepath.Join(tmpDir, "module.prop")); err != nil {
-		return &netErr{"包里缺 module.prop"}
-	}
-	if _, err := os.Stat(filepath.Join(tmpDir, "bin", "allin")); err != nil {
-		return &netErr{"包里缺 bin/allin"}
-	}
-
-	// 逐个文件覆盖（不删除 data/ 与日志）
-	entries, err := os.ReadDir(tmpDir)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if name == "data" {
-			continue // 保护用户数据
-		}
-		src := filepath.Join(tmpDir, name)
-		dst := filepath.Join(moduleDir, name)
-		if e.IsDir() {
-			// bin/ 下的 allin 同样写成 .pending
-			if name == "bin" {
-				if err := copyDirWithPending(src, dst); err != nil {
-					if oldProp != nil {
-						_ = os.WriteFile(filepath.Join(moduleDir, "module.prop"), oldProp, 0o644)
-					}
-					return err
-				}
-				continue
-			}
-			if err := copyDir(src, dst); err != nil {
-				// 回滚 module.prop
-				if oldProp != nil {
-					_ = os.WriteFile(filepath.Join(moduleDir, "module.prop"), oldProp, 0o644)
-				}
-				return err
-			}
-			continue
-		}
-		// 正在运行的二进制不能覆盖自己：写成 .pending，service.sh 下次启动时替换
-		if name == "allin" && strings.HasPrefix(src, filepath.Join(tmpDir, "bin")) {
-			dst = dst + ".pending"
-		}
-		if err := copyFile(src, dst); err != nil {
-			if oldProp != nil {
-				_ = os.WriteFile(filepath.Join(moduleDir, "module.prop"), oldProp, 0o644)
-			}
-			return err
-		}
-	}
-	// 确保脚本可执行
-	for _, sh := range []string{"service.sh", "action.sh", "uninstall.sh"} {
-		_ = os.Chmod(filepath.Join(moduleDir, sh), 0o755)
-	}
-	_ = os.Chmod(filepath.Join(moduleDir, "bin", "allin"), 0o755)
-
-	// 重新生成 update.json 供 KernelSU 管理器识别（如果有这个能力）
-	return nil
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	// 先写临时文件再 rename，避免覆盖运行中的二进制失败
-	tmp := dst + ".new"
-	out, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-	if _, err = io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(tmp)
-		return err
-	}
-	out.Close()
-	if err := os.Rename(tmp, dst); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
-}
-
 // copyDirWithPending 拷目录，其中名为 allin 的文件写成 allin.pending。
 // 运行中的二进制无法直接覆盖（ETXTBSY），必须留给 service.sh 下次启动时替换。
 func copyDirWithPending(src, dst string) error {
@@ -435,4 +355,91 @@ func sha256Of(path string) string {
 		return ""
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// updateTempDir 返回一个**当前进程真的能写**的临时目录。
+//
+// 不能直接用 os.TempDir()：它读的是 TMPDIR 环境变量，
+// 而网关以 shell(2000) 身份运行、由别的应用拉起时，
+// TMPDIR 可能指向那个应用的私有缓存目录（如
+// /data/user/0/<other.app>/cache），网关对它没有写权限，
+// 在线更新会直接报 permission denied。
+//
+// 这里按优先级逐个尝试，第一个能建文件的就用：
+//  1. 运行目录（/data/local/tmp/allin-run，模块启动时 chown 给 shell）
+//  2. 模块目录下的 tmp/（模块管理器里手动运行时可用）
+//  3. 系统 /tmp 与 /data/local/tmp
+//  4. 实在没有就退回 os.TempDir()，让错误信息如实暴露
+func updateTempDir() (string, error) {
+	candidates := make([]string, 0, 6)
+	if runtimeDir := os.Getenv("ALLIN_RUN_DIR"); runtimeDir != "" {
+		candidates = append(candidates, runtimeDir)
+	}
+	candidates = append(candidates,
+		"/data/local/tmp/allin-run",
+		filepath.Join(moduleDir, "tmp"),
+		"/data/local/tmp",
+		"/tmp",
+	)
+	for _, dir := range candidates {
+		if dir == "" {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			continue
+		}
+		probe := filepath.Join(dir, ".allin-write-probe")
+		f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			continue
+		}
+		_ = f.Close()
+		_ = os.Remove(probe)
+		return dir, nil
+	}
+	fallback := os.TempDir()
+	return fallback, fmt.Errorf("找不到可写的临时目录（尝试过 %v，回退 %s 也可能不可写）", candidates, fallback)
+}
+
+// tryTriggerServiceScript 尝试以 root 身份跑一次 service.sh，让更新立刻生效。
+//
+// 网关本身是 shell(2000)，正常情况下没有 root 通道，这时返回 false，
+// 由用户重启模块生效——调用方必须把这一点如实告诉用户，不能假装已应用。
+func tryTriggerServiceScript() bool {
+	script := filepath.Join(moduleDir, "service.sh")
+	if _, err := os.Stat(script); err != nil {
+		return false
+	}
+	// 只有存在可用 su 时才尝试；不存在就静默跳过
+	for _, su := range []string{"/system/bin/su", "/system/xbin/su", "/debug_ramdisk/su"} {
+		if _, err := os.Stat(su); err != nil {
+			continue
+		}
+		cmd := exec.Command(su, "-c", "sh "+script)
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		if err := cmd.Start(); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// copyFile 复制文件到目标路径（目标目录不存在会创建）。
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o777); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }

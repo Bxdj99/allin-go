@@ -641,7 +641,7 @@
       <button class="btn" id="btnApplyUpdate" hidden>立即更新</button>
     </div>
     <div class="dim" style="font-size:11px;margin-top:8px">
-      从 GitHub Releases 拉取最新模块包。更新后需要重启手机（或重启模块）生效，账号与配置不受影响。
+      从 GitHub Releases 拉取最新模块包。下载完成后<b>需要重启模块</b>（或在模块管理器里重新运行一次）才会真正应用，账号与配置不受影响。
     </div>
   </div>
 
@@ -1674,7 +1674,7 @@ async function checkUpdate() {
 
 async function applyUpdate() {
   const btn = el('btnApplyUpdate');
-  if (!confirm('确定更新？会从 GitHub 下载并覆盖模块文件（账号与配置保留），完成后需要重启手机。')) return;
+  if (!confirm('确定更新？会从 GitHub 下载最新模块包并放入待应用目录（账号与配置保留），完成后需要重启模块。')) return;
   btn.disabled = true;
   el('verUpdate').innerHTML = '<span class="dim">正在下载并安装，请勿关闭页面…（大文件可能要 1-2 分钟）</span>';
   try {
@@ -1682,9 +1682,9 @@ async function applyUpdate() {
     if (d.ok) {
       el('verUpdate').innerHTML =
         '<div class="ok"><b>' + esc(d.message || '更新完成') + '</b></div>' +
-        '<div class="dim" style="font-size:12px;margin-top:6px">重启手机后，新版本才会真正运行。</div>';
+        '<div class="dim" style="font-size:12px;margin-top:6px">重启模块后，新版本才会真正运行。若提示未能自动应用，请到模块管理器点一次「运行」。</div>';
       el('btnApplyUpdate').hidden = true;
-      toast('更新完成，请重启手机', 'ok');
+      toast('更新包已就绪，请重启模块', 'ok');
     } else {
       el('verUpdate').innerHTML = '<span class="err">' + esc(d.error || '更新失败') + '</span>';
     }
