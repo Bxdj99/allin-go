@@ -278,6 +278,8 @@ type usageCtx struct {
 	// accountID 是本次实际使用的账号，用于按账号统计积分消耗。
 	// 用户反馈「积分莫名少了」时，只能靠这个数据自证。
 	accountID string
+	// creditStats 表示是否记账号级积分统计（面板可关）。
+	creditStats bool
 }
 
 // newUsageCtx 为一条客户端请求建记账上下文。
@@ -319,7 +321,7 @@ func (c *usageCtx) record(usageProvider, usageModel string, ok bool, u usageToke
 		usageModel = c.defaultModel
 	}
 	recordUsageStat(usageProvider, usageModel, ok, u.counts())
-	if c.accountID != "" {
+	if c.creditStats && c.accountID != "" {
 		recordAccountUsage(usageProvider, c.accountID, ok, u)
 	}
 }

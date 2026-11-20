@@ -73,6 +73,7 @@ func recordAccountUsage(providerID, accountID string, ok bool, u usageTokens) {
 		st.CreditMilli.Add(int64(u.Credit*1000 + 0.5))
 	}
 	st.LastAt.Store(time.Now().Unix())
+	markAccUsageDirty()
 }
 
 // accountUsageRow 是导出给面板的一行。
@@ -127,8 +128,9 @@ func splitAccKey(k string) (string, string) {
 // resetAccountUsage 清零统计（面板上的「清零」按钮用）。
 func resetAccountUsage() {
 	accUsageMu.Lock()
-	defer accUsageMu.Unlock()
 	accUsageTable = map[string]*accountUsage{}
+	accUsageMu.Unlock()
+	markAccUsageDirty()
 }
 
 // handleAccountUsage 返回按账号统计的积分消耗。
@@ -160,4 +162,28 @@ func (s *Server) handleAccountUsageReset(w http.ResponseWriter, r *http.Request)
 	}
 	resetAccountUsage()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// recordCreditDelta 把「余额下降量」记到某个账号的消耗上。
+//
+// 与 recordAccountUsage 分开：那个按请求记 token 与 credit 字段，
+// 这个按余额差值记积分。两者互不覆盖。
+func (s *Server) recordCreditDelta(providerID, accountID string, delta float64) {
+	if delta <= 0 || accountID == "" {
+		return
+	}
+	k := accUsageKey(providerID, accountID)
+	accUsageMu.RLock()
+	st := accUsageTable[k]
+	accUsageMu.RUnlock()
+	if st == nil {
+		accUsageMu.Lock()
+		if st = accUsageTable[k]; st == nil {
+			st = &accountUsage{}
+			accUsageTable[k] = st
+		}
+		accUsageMu.Unlock()
+	}
+	st.CreditMilli.Add(int64(delta*1000 + 0.5))
+	markAccUsageDirty()
 }

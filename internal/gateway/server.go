@@ -135,6 +135,9 @@ func (s *Server) routes() {
 func (s *Server) Start(ctx context.Context) {
 	s.startTokenRefresher(ctx)
 	s.startCreditsRefresher(ctx)
+	// 账号用量：启动时从磁盘恢复，之后定期落盘
+	s.loadAccountUsage()
+	s.startAccountUsageSaver(ctx)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -261,6 +264,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	// 请求级记账上下文：一条客户端请求可能换号、换模型甚至换供应商，
 	// 最终记账以真正提供服务的那个供应商/模型为准（见 usageCtx）。
 	uc := newUsageCtx(head.Model)
+	uc.creditStats = cfg.Server.CreditStatsEnabled()
 	// 模型名允许带思考档位后缀：workbuddy/glm-5.3:high
 	modelNoSuffix, effortSuffix := splitModelEffort(head.Model)
 	// 客户端请求体里的档位也要能读到（resolveEffort 需要它做 auto 模式判断）

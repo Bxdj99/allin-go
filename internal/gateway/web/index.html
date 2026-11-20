@@ -426,6 +426,20 @@
     <div id="accountGroups"><div class="dim">加载中…</div></div>
   </div>
 
+<div class="card">
+    <h2>账号体检 <button class="btn sm primary" id="btnProbeAccounts" style="margin-left:auto">检测所有账号</button></h2>
+    <div class="dim" style="font-size:12px;margin-bottom:10px">
+      主动问一次上游，明确区分「能用 / 额度用尽 / 需要重新登录」。
+      打的是模型目录接口，<b>不消耗额度</b>。
+    </div>
+    <div id="loginFlowBox" style="display:none;margin-bottom:12px"></div>
+    <div id="probeBox" class="dim">点右上角「检测所有账号」开始</div>
+  </div>
+<div class="card">
+    <h2>账号池健康 <button class="btn sm" id="btnPool" style="margin-left:auto">刷新</button></h2>
+    <div id="poolBox" class="dim">点「刷新」查看成功/失败/冷却情况</div>
+  </div>
+
   <div class="card">
     <h2>批量导出 / 导入账号</h2>
     <div class="dim" style="margin-bottom:10px;font-size:12px">
@@ -464,8 +478,28 @@
     <div id="ioBox" class="dim" style="margin-top:8px;font-size:12px"></div>
   </div>
 
+  
+
   <div class="card">
-    <h2>手动添加 / 覆盖账号</h2>
+    <h2>登录流程（成功后自动写入账号）</h2>
+    <div class="btnrow" style="margin-top:0">
+      <button class="btn primary" id="btnWorkBuddyLogin">走 WorkBuddy 登录</button>
+      <button class="btn primary" id="btnTraeLogin">走 Trae 登录</button>
+      <button class="btn primary" id="btnCopilotLogin">走 GitHub Copilot 登录</button>
+      <button class="btn primary" data-authflow="antigravity">走 Antigravity 登录</button>
+      <button class="btn primary" data-authflow="catpaw">走 CatPaw 登录</button>
+      <button class="btn primary" data-authflow="cline">走 Cline 登录</button>
+      <button class="btn primary" data-authflow="codex">走 Codex 登录</button>
+      <button class="btn primary" data-authflow="minimax">走 MiniMax 登录</button>
+      <button class="btn primary" data-authflow="qoder">走 Qoder 登录</button>
+      <button class="btn primary" data-authflow="raccoon">走 小浣熊 登录</button>
+      <button class="btn primary" data-authflow="wenxin">走 文心 登录</button>
+    </div>
+    <div class="flow" id="flowBox"></div>
+  </div>
+<div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(127,127,127,.22)">
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(127,127,127,.22)">
+    <div style="font-weight:600;margin-bottom:8px;font-size:14px">手动添加 / 覆盖单个账号</div>
     <div class="field">
       <label>所属供应商</label>
       <select id="fAprov"></select>
@@ -502,27 +536,7 @@
       <button class="btn primary" id="btnAccountSave">保存账号</button>
     </div>
   </div>
-
-  <div class="card">
-    <h2>登录流程（成功后自动写入账号）</h2>
-    <div class="btnrow" style="margin-top:0">
-      <button class="btn primary" id="btnWorkBuddyLogin">走 WorkBuddy 登录</button>
-      <button class="btn primary" id="btnTraeLogin">走 Trae 登录</button>
-      <button class="btn primary" id="btnCopilotLogin">走 GitHub Copilot 登录</button>
-      <button class="btn primary" data-authflow="antigravity">走 Antigravity 登录</button>
-      <button class="btn primary" data-authflow="catpaw">走 CatPaw 登录</button>
-      <button class="btn primary" data-authflow="cline">走 Cline 登录</button>
-      <button class="btn primary" data-authflow="codex">走 Codex 登录</button>
-      <button class="btn primary" data-authflow="minimax">走 MiniMax 登录</button>
-      <button class="btn primary" data-authflow="qoder">走 Qoder 登录</button>
-      <button class="btn primary" data-authflow="raccoon">走 小浣熊 登录</button>
-      <button class="btn primary" data-authflow="wenxin">走 文心 登录</button>
-    </div>
-    <div class="flow" id="flowBox"></div>
-  </div>
-
-  <div class="card">
-    <h2>粘贴 Token / Cookie 建账号</h2>
+<div style="font-weight:600;margin-bottom:8px;font-size:14px">或者：粘贴 Token / Cookie 直接建账号</div>
     <div class="dim" style="font-size:12px;margin-bottom:10px">
       小浣熊网页版已登录时，浏览器里就有可用的凭据，贴进来即可，不必再走授权流程。
       <b>整段 Cookie 和单独 token 都支持</b>，会自动识别。
@@ -546,32 +560,39 @@
     </div>
   </div>
 
-  <div class="card">
-    <h2>账号体检 <button class="btn sm primary" id="btnProbeAccounts" style="margin-left:auto">检测所有账号</button></h2>
-    <div class="dim" style="font-size:12px;margin-bottom:10px">
-      主动问一次上游，明确区分「能用 / 额度用尽 / 需要重新登录」。
-      打的是模型目录接口，<b>不消耗额度</b>。
-    </div>
-    <div id="loginFlowBox" style="display:none;margin-bottom:12px"></div>
-    <div id="probeBox" class="dim">点右上角「检测所有账号」开始</div>
-  </div>
 
-  <div class="card">
-    <h2>账号池健康 <button class="btn sm" id="btnPool" style="margin-left:auto">刷新</button></h2>
-    <div id="poolBox" class="dim">点「刷新」查看成功/失败/冷却情况</div>
-  </div>
+  
+
+  
+
+  
 </section>
 
 <!-- ==================== 4. 用量 ==================== -->
 <section class="page" id="page-usage">
   <div class="card">
-    <h2>用量（进程内计数，网关重启归零）</h2>
+    <h2>积分消耗 <button class="btn sm" id="btnUsageRefresh" style="margin-left:auto">刷新</button>
+      <button class="btn sm" id="btnCreditStatsToggle" style="margin-left:6px">—</button>
+      <button class="btn sm danger" id="btnUsageReset" style="margin-left:6px">清零</button></h2>
+    <div class="dim" style="font-size:12px;margin-bottom:10px">
+      按账号累计消耗的积分与 token，<b>数据会落盘，重启后继续累加</b>。
+    </div>
+    <div id="usageSummary" class="dim">点「刷新」加载</div>
+    <div id="usageTable" style="margin-top:10px"></div>
+    <div class="hint" style="margin-top:12px">
+      <b>积分怎么算的：</b>上游聊天响应里不返回积分字段，所以按「余额下降量」推算——
+      每次积分刷新（10 分钟）对比该账号前后余额，下降多少就记多少。
+      充值或额度重置导致的余额上升不计入消耗。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>请求计数（进程内，重启归零）</h2>
     <div class="btnrow" style="margin-top:0">
-      <button class="btn" id="btnUsageRefresh">刷新</button>
-      <button class="btn danger" id="btnUsageReset">重置计数</button>
+      <button class="btn" id="btnReqRefresh">刷新</button>
+      <button class="btn danger" id="btnReqReset">重置计数</button>
     </div>
     <div id="usageBox"><div class="dim" style="margin-top:8px">加载中…</div></div>
-    <div class="hint">这些数字由网关进程在转发请求时累加，进程重启归零；若长期为空，说明后端还没把记录点接到请求路径上。</div>
   </div>
 </section>
 
@@ -591,31 +612,7 @@
     </div>
   </div>
 
-  <div class="card">
-    <h2>历史压缩</h2>
-    <div class="dim" style="font-size:12px;margin-bottom:10px">
-      开启后，较早的工具调用（读文件、跑命令等）会被摘要成一行，
-      只保留「调过什么、返回多大」，正文省略。
-    </div>
-    <div class="hint" style="margin-bottom:12px">
-      <b>有得有失：</b>压缩能显著减小请求体，长会话更省 token；<br>
-      但它改变了 prompt 前缀，<b>可能降低上游缓存命中率</b>，极端情况下反而更费积分或更慢。<br>
-      默认开启。如果你更在意稳定性与缓存命中，可以关掉。最近几轮的工具调用始终保留原文。
-    </div>
-    <div class="field">
-      <label>保留最近的工具调用组数（越大越保守）</label>
-      <input id="fKeepRecent" type="number" min="0" max="200" value="6" style="width:120px">
-    </div>
-    <div class="field">
-      <label>输出 token 上限（0 = 不限制；只在客户端传得更大时下调）</label>
-      <input id="fMaxOutput" type="number" min="0" max="2000000" value="0" style="width:160px">
-    </div>
-    <div class="btnrow">
-      <button class="btn primary" id="btnCompressToggle">开启压缩</button>
-      <button class="btn" id="btnCompressSave">保存设置</button>
-      <span class="dim" id="compressState" style="font-size:12px"></span>
-    </div>
-  </div>
+  
 
   <div class="card">
     <h2>首字延迟统计</h2>
@@ -655,6 +652,31 @@
   </div>
 
   <div class="card">
+    <h2>历史压缩</h2>
+    <div class="dim" style="font-size:12px;margin-bottom:10px">
+      开启后，较早的工具调用（读文件、跑命令等）会被摘要成一行，
+      只保留「调过什么、返回多大」，正文省略。
+    </div>
+    <div class="hint" style="margin-bottom:12px">
+      <b>有得有失：</b>压缩能显著减小请求体，长会话更省 token；<br>
+      但它改变了 prompt 前缀，<b>可能降低上游缓存命中率</b>，极端情况下反而更费积分或更慢。<br>
+      默认开启。如果你更在意稳定性与缓存命中，可以关掉。最近几轮的工具调用始终保留原文。
+    </div>
+    <div class="field">
+      <label>保留最近的工具调用组数（越大越保守）</label>
+      <input id="fKeepRecent" type="number" min="0" max="200" value="6" style="width:120px">
+    </div>
+    <div class="field">
+      <label>输出 token 上限（0 = 不限制；只在客户端传得更大时下调）</label>
+      <input id="fMaxOutput" type="number" min="0" max="2000000" value="0" style="width:160px">
+    </div>
+    <div class="btnrow">
+      <button class="btn primary" id="btnCompressToggle">开启压缩</button>
+      <button class="btn" id="btnCompressSave">保存设置</button>
+      <span class="dim" id="compressState" style="font-size:12px"></span>
+    </div>
+  </div>
+<div class="card">
     <h2>系统提示词注入</h2>
     <div class="dim" style="font-size:12px;margin-bottom:8px">
       在这里设置的提示词会在网关层强制注入到每个请求，客户端自己带什么 system 都压得住。
@@ -947,6 +969,7 @@ const LOADERS = {
   overview: async () => { await loadOverview(); await loadEffort(); await loadHealth(); await loadSchedule(); await loadPortNotice(); },
   providers: loadProviders,
   accounts: loadAccountsTab,
+  usage: async () => { await loadUsage(); await loadCreditStatsToggle(); await loadCreditStats(); },
   usage: loadUsage,
   logs: loadLogs,
   settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); await checkUpdate(); },
@@ -2718,6 +2741,114 @@ const PROBE_LABEL = {
   'error': ['检测失败', 'warn'],
 };
 
+/* ===================== 积分消耗 ===================== */
+
+function fmtCredit(v) {
+  if (v == null) return '-';
+  if (v >= 1000) return (v / 1000).toFixed(2) + 'k';
+  return (Math.round(v * 100) / 100).toString();
+}
+
+function fmtTokens(n) {
+  if (!n) return '0';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n);
+}
+
+async function loadCreditStats() {
+  el('usageSummary').innerHTML = '<span class="dim">加载中…</span>';
+  try {
+    const d = await api('/api/accounts/usage');
+    const rows = d.rows || [];
+    if (!rows.length) {
+      el('usageSummary').innerHTML = '<span class="dim">还没有调用记录</span>';
+      el('usageTable').innerHTML = '';
+      return;
+    }
+    el('usageSummary').innerHTML =
+      '累计消耗 <b style="color:#f59e0b">' + fmtCredit(d.totalCredit) + '</b> 积分　' +
+      '共 <b>' + (d.totalReq || 0) + '</b> 次调用';
+
+    const body = rows.map((r) => {
+      return '<tr>' +
+        '<td style="font-size:11px">' + esc(r.providerId) + '</td>' +
+        '<td>' + esc(r.accountId) + '</td>' +
+        '<td class="' + (r.credit > 0 ? '' : 'dim') + '">' + fmtCredit(r.credit) + '</td>' +
+        '<td>' + (r.requests || 0) + '</td>' +
+        '<td style="font-size:11px">' + fmtTokens(r.inTokens) + '</td>' +
+        '<td style="font-size:11px">' + fmtTokens(r.outTokens) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    el('usageTable').innerHTML =
+      '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">' +
+      '<thead><tr style="text-align:left;opacity:.6">' +
+      '<th>供应商</th><th>账号</th><th>积分</th><th>调用</th><th>输入 token</th><th>输出 token</th>' +
+      '</tr></thead><tbody>' + body + '</tbody></table></div>';
+  } catch (err) {
+    el('usageSummary').innerHTML = '<span class="err">加载失败：' + esc(err.message) + '</span>';
+  }
+}
+
+on('btnCreditStatsRefresh', 'click', loadCreditStats);
+let _creditStatsOn = true;
+
+function renderCreditStatsToggle() {
+  const b = el('btnCreditStatsToggle');
+  if (!b) return;
+  if (_creditStatsOn) {
+    b.textContent = '关闭统计';
+    b.className = 'btn sm';
+    el('usageSummary').dataset.state = 'on';
+  } else {
+    b.textContent = '开启统计';
+    b.className = 'btn sm primary';
+  }
+}
+
+async function loadCreditStatsToggle() {
+  try {
+    const d = await api('/api/compress');
+    _creditStatsOn = d.creditStats !== false;
+    renderCreditStatsToggle();
+  } catch (e) { /* 读不到就按默认开启显示 */ }
+}
+
+on('btnCreditStatsToggle', 'click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const r = await api('/api/compress/set', { method: 'POST', body: { creditStats: !_creditStatsOn } });
+    _creditStatsOn = r.creditStats !== false;
+    renderCreditStatsToggle();
+    toast(_creditStatsOn ? '已开启积分统计' : '已关闭积分统计', 'ok');
+    if (!_creditStatsOn) {
+      el('usageSummary').innerHTML = '<span class="dim">统计已关闭，不再累加新数据（已有数据保留）</span>';
+      el('usageTable').innerHTML = '';
+    } else {
+      await loadCreditStats();
+    }
+  } catch (err) {
+    toast('切换失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+on('btnUsageRefresh', 'click', loadCreditStats);
+
+on('btnUsageReset', 'click', async () => {
+  if (!confirm('确定清空积分统计？只清统计数据，不影响账号与配置。')) return;
+  try {
+    await api('/api/accounts/usage/reset', { method: 'POST' });
+    toast('已清空', 'ok');
+    await loadCreditStats();
+  } catch (err) {
+    toast('清空失败：' + err.message, 'err');
+  }
+});
+
 // 体检结果里的「重新登录」按钮：发起登录流，并把要覆盖的账号 ID 带过去
 on('probeBox', 'click', async (e) => {
   const btn = e.target.closest && e.target.closest('.btn-relogin');
@@ -3391,10 +3522,10 @@ async function loadUsage() {
   }
 }
 
-on('btnUsageRefresh', 'click', loadUsage);
+on('btnReqRefresh', 'click', loadUsage);
 
-on('btnUsageReset', 'click', async () => {
-  if (!confirm('清空所有用量计数？只影响面板统计，不影响配置。')) return;
+on('btnReqReset', 'click', async () => {
+  if (!confirm('清空所有请求计数？只影响面板统计，不影响配置。')) return;
   try {
     await api('/api/usage/reset', { method: 'POST', body: '{}' });
     toast('已重置用量计数', 'ok');

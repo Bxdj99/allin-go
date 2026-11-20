@@ -43,10 +43,21 @@ type Server struct {
 	HistoryCompress *bool `json:"historyCompress,omitempty"`
 	// CompressKeepRecent 是压缩时保留最近的工具调用组数，默认 6。
 	CompressKeepRecent *int `json:"compressKeepRecent,omitempty"`
+	// CreditStats 是积分消耗统计的总开关。默认开启。
+	//
+	// 开启后每次调用都会按账号累加 token 与积分，并定期落盘。
+	// 如果你更在意性能或不想在磁盘上留记录，可以关掉——
+	// 关闭后不再累加新数据，已有数据保留不动。
+	CreditStats *bool `json:"creditStats,omitempty"`
 	// MaxOutputTokens 是输出 token 上限。0 表示不改写客户端请求。
 	// 设为正数时，请求里的 max_tokens / max_completion_tokens 会被封到这个值以内
 	// （只在客户端传得更大时才下调，不会把小的改大）。
 	MaxOutputTokens *int `json:"maxOutputTokens,omitempty"`
+}
+
+// CreditStatsEnabled 返回积分消耗统计是否开启（未配置视为开启）。
+func (s *Server) CreditStatsEnabled() bool {
+	return s.CreditStats == nil || *s.CreditStats
 }
 
 // MaxOutputCap 返回输出 token 上限，0 表示不限制。

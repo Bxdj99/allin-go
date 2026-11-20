@@ -516,3 +516,15 @@ func (p *Pool) NeedRelogin(pid, aid string) bool {
 	st := p.state[key(pid, aid)]
 	return st != nil && st.needRelogin
 }
+
+// LastRemaining 返回该账号上一次快照里的余额。
+// ok=false 表示还没有过快照，调用方不该用它算差值。
+func (p *Pool) LastRemaining(pid, aid string) (float64, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st := p.state[key(pid, aid)]
+	if st == nil || st.creditsAt.IsZero() {
+		return 0, false
+	}
+	return st.remaining, true
+}

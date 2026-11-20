@@ -98,6 +98,18 @@ func (s *Server) refreshCredits(parent context.Context) {
 			if t, ok := parseCreditTime(sum.ResetAt); ok {
 				resetAt = t
 			}
+			// 用「余额下降量」反推这段时间的积分消耗。
+			//
+			// 上游的聊天响应里**不返回 credit 字段**（实测确认），
+			// 所以没法按次记账。但余额是准的，两次刷新之间的下降量
+			// 就是这段时间真实花掉的积分，按账号累计即可。
+			//
+			// 注意只在「余额下降」时记：余额上升是重置或充值，不算消耗。
+			if cfg.Server.CreditStatsEnabled() {
+				if prev, ok := s.pool.LastRemaining(j.providerID, j.accountID); ok && prev > sum.Remaining {
+					s.recordCreditDelta(j.providerID, j.accountID, prev-sum.Remaining)
+				}
+			}
 			s.pool.SetCreditsFull(j.providerID, j.accountID, sum.Remaining, sum.Total, resetAt)
 		}(j)
 	}
