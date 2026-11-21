@@ -48,8 +48,11 @@ import (
 const (
 	// 出站客户端版本段。对齐 wb2api 的 defaultClientVersion / defaultCliVersion，
 	// 上游对这些头不严格校验，但缺了会显得不像官方客户端。
-	wbClientVersion = "5.5.4"
-	wbCliVersion    = "2.137.1"
+	// 客户端版本号要和官方当前版本一致。
+	// 报旧版本（之前是 5.5.4）会被上游判为可疑客户端，
+	// 与缺失指纹头叠加起来就更容易触发渠道校验。
+	wbClientVersion = "5.9.3"
+	wbCliVersion    = "2.165.0"
 
 	// CN 三个 base。注意 billing 与 growth 不是同一个域：
 	// billing 在 codebuddy.cn，growth 在 copilot.tencent.com。
@@ -266,6 +269,27 @@ func (c Customer) setHeaders(req *http.Request, withUA bool) {
 		req.Header.Set("Origin", c.referer())
 		req.Header.Set("Referer", c.referer()+"/")
 		req.Header.Set("User-Agent", c.userAgent())
+		// 官方客户端指纹。缺了这些上游会判「不是官方客户端发出的」，
+		// 直接回 11128（unapproved channel）——换成官方 App 就能过，
+		// 差别就在这里：App 带全这一套，网关之前一个都没带。
+		req.Header.Set("X-Product", "SaaS")
+		req.Header.Set("X-IDE-Type", "WorkBuddy")
+		req.Header.Set("X-IDE-Name", "WorkBuddy")
+		req.Header.Set("X-IDE-Version", "5.9.3")
+		req.Header.Set("X-Agent-Intent", "craft")
+		req.Header.Set("X-Agent-Purpose", "conversation")
+		req.Header.Set("X-Agent-Type", "main")
+		req.Header.Set("X-Agent-Runtime", "local-agent")
+		req.Header.Set("X-Auth-Refresh-Source", "workbuddy")
+		// 模拟官方 SDK 的运行时标识（Node + anthropic-sdk 形态）
+		req.Header.Set("X-Stainless-Retry-Count", "0")
+		req.Header.Set("X-Stainless-Timeout", "1200")
+		req.Header.Set("X-Stainless-Lang", "js")
+		req.Header.Set("X-Stainless-Package-Version", "6.25.0")
+		req.Header.Set("X-Stainless-OS", "Linux")
+		req.Header.Set("X-Stainless-Arch", "arm64")
+		req.Header.Set("X-Stainless-Runtime", "node")
+		req.Header.Set("X-Stainless-Runtime-Version", "v22.21.1")
 	}
 	if c.UID != "" {
 		req.Header.Set("X-User-Id", c.UID)

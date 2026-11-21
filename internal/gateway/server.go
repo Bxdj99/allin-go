@@ -355,6 +355,8 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	var preTrimBody []byte
 	trimRounds := 0
 	trimBudget := 0
+	// signatureRetried 记录因 thinking 签名问题而重发的次数（见下方 11159 处理）
+	signatureRetried := 0
 	softRetries := 0
 
 	// WorkBuddy 需要请求体适配：工具名规范化、tool_choice 归一化、补 reasoning_effort
@@ -585,6 +587,26 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				if resp.StatusCode >= 400 {
 					log.Printf("[UPSTREAM-BODY] %d %s: %s", resp.StatusCode, acct.ID, truncate(string(sniff), 600))
 				}
+				// thinking 签名失效（11159 / 11133）：去掉 thinking 块重发一次。
+				//
+				// 必须放在 RetryForbidden 之前判断——这类拒绝同样带 retry:false，
+				// 但它属于「换个请求体就能过」，与「别重试」是两回事。
+				// 上游对历史里的 thinking 块做签名校验，别处签发的一律不认，
+				// 而去掉之后同一段历史就能通过。
+				if kind == provider.KindWorkBuddy && signatureRetried < maxSignatureRetries &&
+					workbuddy.IsSignatureRefusal(resp.StatusCode, string(sniff)) {
+					if stripped := workbuddy.WithoutThinkingBlocks(stepBody); stripped != nil {
+						resp.Body.Close()
+						signatureRetried++
+						stepBody = stripped
+						log.Printf("thinking 签名失效，去掉 thinking 块后重发（第 %d 次）: %s/%s",
+							signatureRetried, sp.ID, acct.ID)
+						// 同一账号、同一 attempt 重发，不消耗换号次数
+						attempt--
+						continue
+					}
+				}
+
 				// 上游明确要求不重试时，直接停下。
 				// 继续换号只会白耗配额，还可能被上游判为异常调用。
 				if fallback.RetryForbidden(string(sniff)) {
@@ -1202,6 +1224,9 @@ func truncate(s string, n int) string {
 const (
 	maxTrimRounds = 4
 	minTrimBudget = 120_000
+	// maxSignatureRetries 是因 thinking 签名失效而重发的最大次数。
+	// 去掉 thinking 只该做一次；重发后仍失败说明问题不在这。
+	maxSignatureRetries = 1
 )
 
 // maxSoftRetries 是「上游瞬态拒绝」的原地重发次数。
