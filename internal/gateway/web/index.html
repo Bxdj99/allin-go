@@ -1062,6 +1062,7 @@ const OUTCOME = {
   rejected: ['被上游拒绝', 'err'],
   bad_response: ['响应异常', 'err'],
   sign_in_required: ['凭据失效', 'err'],
+  stale_flag: ['状态冲突', 'err'],
 };
 
 function renderCheckin(d, dry) {
@@ -1070,6 +1071,7 @@ function renderCheckin(d, dry) {
   if (d && d.total != null) sum.push('共 ' + d.total + ' 个账号');
   if (d && d.succeeded != null && !dry) sum.push('<span class="ok">新签 ' + d.succeeded + '</span>');
   if (d && d.already != null && !dry) sum.push('<span class="warn">今日已签 ' + d.already + '</span>');
+  if (d && d.staleFlag && !dry) sum.push('<span class="err">状态冲突 ' + d.staleFlag + '</span>');
   if (d && d.failed) sum.push('<span class="err">失败 ' + d.failed + '</span>');
   if (d && d.skipped) sum.push('<span class="dim">跳过 ' + d.skipped + '</span>');
   el('checkinSummary').innerHTML = sum.length
@@ -1080,11 +1082,19 @@ function renderCheckin(d, dry) {
     el('checkinBox').innerHTML = '<div class="empty">没有可签到的账号（需要在 workbuddy 供应商下加带 uid 的账号）</div>';
     return;
   }
+  // CST 当天日期：配置里存的是北京时间口径，浏览器可能不在该时区。
+  const cstToday = (() => {
+    const t = new Date(Date.now() + (new Date().getTimezoneOffset() + 480) * 60000);
+    return t.toISOString().slice(0, 10);
+  })();
   const rows = results.map((r) => {
-    const oc = r.outcome || (dry ? r.checkinOutcome : '') || '';
+    // 查状态模式下 outcome 可能是几天前留下的 already，不能直接当「今日已签」。
+    // 只有 checkinDate 就是今天，才算今天真的签过。
+    const fresh = !dry || (r.checkinDate === cstToday);
+    const oc = r.outcome || (fresh ? r.checkinOutcome : '') || '';
     const meta = dry
       ? (r.skipped ? '<span class="dim">跳过：' + esc(SKIP[r.skipped] || r.skipped) + '</span>'
-        : (r.checkinDate ? '上次签到 ' + esc(r.checkinDate) : '未签到过'))
+        : (r.checkinDate ? '上次签到 ' + esc(r.checkinDate) + (fresh ? '' : ' <span class="warn">· 非今日</span>') : '未签到过'))
       : (r.error ? '<span class="err">' + esc(r.error) + '</span>'
         : (r.skipped ? '<span class="dim">跳过：' + esc(SKIP[r.skipped] || r.skipped) + '</span>' : ''));
     let badge;
@@ -1094,8 +1104,14 @@ function renderCheckin(d, dry) {
       const pair = OUTCOME[oc] || [oc, ''];
       badge = '<span class="badge ' + pair[1] + '">' + esc(pair[0]) + '</span>';
     } else badge = '<span class="badge">未查</span>';
-    const credit = r.credit != null ? r.credit : (r.checkinCredit != null ? r.checkinCredit : '');
-    const streak = r.streakDays != null ? r.streakDays : (r.checkinStreak != null ? r.checkinStreak : '');
+    // already / 跳过 时上游不回 credit，这里退回历史记录，别让两列空成「-」
+    // 让人以为签到数据丢了。
+    const pickNum = (...vals) => {
+      for (const v of vals) if (v != null && v !== 0) return v;
+      return '';
+    };
+    const credit = pickNum(r.credit, r.checkinCredit);
+    const streak = pickNum(r.streakDays, r.checkinStreak, r.rawStreak);
     return '<tr>' +
       '<td>' + esc(r.name || r.accountId || r.account || '-') +
         '<div class="dim" style="font-size:11px">' + esc(r.provider || '') + '</div></td>' +

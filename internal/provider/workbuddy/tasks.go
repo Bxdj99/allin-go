@@ -91,6 +91,10 @@ const (
 // cstZone 上游自然日按 00:00 CST 重置。中国无夏令时，固定 +8 即可，不依赖 tzdata。
 var cstZone = time.FixedZone("CST", 8*60*60)
 
+// CSTZone 暴露上游自然日所用的时区（00:00 CST 重置），
+// 供网关侧做「今天」判定，避免依赖进程本地时区（模块里可能是 UTC）。
+func CSTZone() *time.Location { return cstZone }
+
 // ---------- 结果语义 ----------
 
 // Outcome 是单个任务的一次执行结论。

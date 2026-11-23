@@ -12,6 +12,7 @@ import (
 
 	"allin/internal/config"
 	"allin/internal/provider"
+	"allin/internal/provider/workbuddy"
 )
 
 // handleStatus 返回网关运行状态。
@@ -133,7 +134,7 @@ func (s *Server) handleWorkBuddyCheckin(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var results []map[string]any
-	var ok, already, failed, skipped int
+	var ok, already, failed, skipped, staleFlag int
 	changed := false
 
 	for _, target := range targets {
@@ -187,6 +188,9 @@ func (s *Server) handleWorkBuddyCheckin(w http.ResponseWriter, r *http.Request) 
 			if err != nil {
 				row["ok"] = false
 				row["error"] = err.Error()
+				if outcome == "stale_flag" {
+					staleFlag++
+				}
 				failed++
 			} else {
 				row["ok"] = true
@@ -226,6 +230,7 @@ func (s *Server) handleWorkBuddyCheckin(w http.ResponseWriter, r *http.Request) 
 		"already":   already,
 		"failed":    failed,
 		"skipped":   skipped,
+		"staleFlag": staleFlag,
 		"results":   results,
 	})
 }
@@ -276,13 +281,119 @@ func (s *Server) doCheckin(origin string, a *config.Account) (credit, streak int
 		return env.Data.Credit, env.Data.StreakDays, "ok", nil
 	}
 	if strings.Contains(env.Msg, "已签到") || strings.Contains(strings.ToLower(env.Msg), "already") {
+		// 10001「今天已签到，请明天再来」不能直接当成功：
+		// 上游对「今天压根没签过、但状态位已被占」也回这句（实测同一时刻
+		// 一个新号返回 code:0 +100，一个旧号返回 10001 且 heatmap 当天 score=0）。
+		// 直接判 already 会把「没签到」写进 checkinDate，面板显示「今日已签」
+		// 而积分并未到账，且当天不会再重试。
+		// 这里用 heatmap 当日 score 交叉验证：有分才算真已签，无分说明状态位
+		// 与事实不符，降级为 failed（不写 checkinDate，允许下一轮重试）。
+		if scored, known := heatmapTodayScored(origin, a); known && !scored {
+			return 0, 0, "stale_flag", fmt.Errorf("上游返回「已签到」但当天无签到记录（heatmap score=0），已视为未签到")
+		}
+		// 10001 的 data 是空的，credit/streak 全是零值。streak 这里补查一次，
+		// 否则「连登 0 天」会写进配置，面板看起来像连登断了。
+		if env.Data.StreakDays == 0 {
+			if days := streakDays(origin, a); days > 0 {
+				env.Data.StreakDays = days
+			}
+		}
 		return env.Data.Credit, env.Data.StreakDays, "already", nil
 	}
 	return 0, 0, "rejected", fmt.Errorf("%s", env.Msg)
 }
 
+// heatmapTodayScored 查 heatmap 当天是否已有签到得分（score > 0）。
+//
+// known=false 表示查询失败或当天没有 cell —— 调用方拿不到结论时应保持原有
+// 判断，不能因为查不到就推翻上游的「已签到」。
+func heatmapTodayScored(origin string, a *config.Account) (scored, known bool) {
+	url := strings.TrimRight(origin, "/") + "/activity/growth/heatmap"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return false, false
+	}
+	req.Header.Set("Authorization", "Bearer "+a.Key())
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-CodeBuddy-Request", "1")
+	req.Header.Set("X-User-Id", a.UID)
+	domain := a.Domain
+	if domain == "" {
+		domain = "copilot.tencent.com"
+	}
+	req.Header.Set("X-Domain", domain)
+	client := &http.Client{Timeout: 20 * time.Second, Transport: provider.HTTPClient.Transport}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, false
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	var env struct {
+		Data struct {
+			Cells []struct {
+				Date  string `json:"date"`
+				Score int    `json:"score"`
+			} `json:"cells"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return false, false
+	}
+	todayStr := time.Now().In(workbuddy.CSTZone()).Format("2006-01-02")
+	for _, cell := range env.Data.Cells {
+		if len(cell.Date) >= 10 && cell.Date[:10] == todayStr {
+			return cell.Score > 0, true
+		}
+	}
+	return false, false
+}
+
+// streakDays 查当前连登天数，用于 10001 响应缺 data 时补值。
+// 查不到返回 0，调用方按「未知」处理。
+func streakDays(origin string, a *config.Account) int {
+	url := strings.TrimRight(origin, "/") + "/activity/growth/streak"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("Authorization", "Bearer "+a.Key())
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-CodeBuddy-Request", "1")
+	req.Header.Set("X-User-Id", a.UID)
+	domain := a.Domain
+	if domain == "" {
+		domain = "copilot.tencent.com"
+	}
+	req.Header.Set("X-Domain", domain)
+	client := &http.Client{Timeout: 20 * time.Second, Transport: provider.HTTPClient.Transport}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	var env struct {
+		Data struct {
+			Streak struct {
+				Days int `json:"days"`
+			} `json:"streak"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return 0
+	}
+	return env.Data.Streak.Days
+}
+
 func today() string {
-	return time.Now().Format("2006-01-02")
+	return time.Now().In(workbuddy.CSTZone()).Format("2006-01-02")
 }
 
 // mergeMaskedSecrets 把 incoming 中被掩码（或留空）的敏感字段还原成 cur 里的真实值。

@@ -359,9 +359,15 @@ fi
                     -H 'Content-Type: application/json' -d '{}' 2>/dev/null)
                 # 只记 ok 看不出跑了哪些任务 —— 用户反馈「自动任务好像不是全套」
                 # 时无从核对。这里把每账号的任务名与结果都落一行摘要。
+                # 不能匹配 '"ok"'：响应体里逐任务都有 ok 字段，恒命中，
+                # 于是「全部任务失败」也被记成 ok（线上反馈过这个坑）。
+                # 改看顶层 "ok":true —— 它是 failedCount==0 的汇总结论。
                 case "$RESP" in
-                    *'"ok"'*)
+                    *'"ok":true'*)
                         log "workbuddy tasks slot=$slot ok $(summarize_tasks "$RESP")"
+                        ;;
+                    *'"ok":false'*)
+                        log "workbuddy tasks slot=$slot 有任务失败 $(summarize_tasks "$RESP")"
                         ;;
                     *)
                         log "workbuddy tasks slot=$slot 返回异常: $(echo "$RESP" | cut -c1-200)"

@@ -148,7 +148,14 @@ func (s *Server) handleWorkBuddyTasks(w http.ResponseWriter, r *http.Request) {
 					msg := "签到成功"
 					if outcome == "already" {
 						status = workbuddy.OutcomeAlready
-						msg = "今天已签到"
+						// 10001 响应不带 data，streak 是零值；写成「连登 0 天」
+						// 会让人以为连登断了，实际是上游没返回。
+						if streak > 0 {
+							msg = "今天已签到（连登 " + itoaSmall(streak) + " 天）"
+						} else {
+							msg = "今天已签到"
+						}
+						return workbuddy.Outcome{Status: status, Message: msg}
 					}
 					return workbuddy.Outcome{
 						Status:  status,
