@@ -98,6 +98,9 @@ var DefaultModels = []string{
 	"gpt-4o",
 	"gpt-4o-mini",
 	"gpt-4.5-preview",
+	// 生图模型：走 /backend-api/codex/images/generations，
+	// 由网关的 handleImagesCodex 分流，不进聊天链路。
+	ImagesModel,
 }
 
 // tokenRefreshLeeway 提前续期余量：剩余不足 5 分钟就当过期。

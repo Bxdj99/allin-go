@@ -218,6 +218,19 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleImages(w http.ResponseWriter, r *http.Request) {
+	// Codex 生图走独立协议（自己的端点、请求体、只认 ChatGPT 账号），
+	// 先分流；不属于它的请求原样交给通用转发。
+	if r.Method == http.MethodPost && r.Body != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+		_ = r.Body.Close()
+		if err == nil {
+			if s.handleImagesCodex(w, r, body) {
+				return
+			}
+			// 还回去给 forward 读
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+	}
 	s.forward(w, r, "/images/generations", protocolOpenAI)
 }
 
