@@ -264,16 +264,29 @@ sync_back() {
 # 输出形如：acc=11 report:ok checkin:already streak:locked ...
 summarize_tasks() {
     RESP="$1"
-    # 账号数
-    n=$(echo "$RESP" | grep -o '"accountId"' | wc -l)
-    # 任务名与状态配对。
+    # 按账号统计签到结果。
     #
-    # 不能用 sed 的 s///g：整份 JSON 是一行，gsub 会把所有匹配挤成一条，
-    # 只剩最后一个任务。改成先用 grep -o 把所有片段切出来，再整理。
-    PAIRS=$(echo "$RESP" | grep -o '"name":"[a-z-]*","outcome":{"status":"[a-z]*"' 2>/dev/null \
-        | sed 's/"name":"\([a-z-]*\)","outcome":{"status":"\([a-z]*\)"/\1:\2/' \
-        | head -10 | tr '\n' ' ')
-    echo "acc=$n $PAIRS"
+    # 之前把所有账号的任务状态混成一行，结果只剩最后一个账号的，
+    # 7 个成功 4 个失败会显示成「全是 failed」，看着像没签到。
+    # 现在分开数：新签=本次签到成功 已签=今天已签过 失败=失败
+    #
+    # 注意：上游返回的 JSON 带空格（"name": "report"），
+    # 正则必须允许冒号后有空格，否则一条都匹配不到。
+    count_status() {
+        echo "$RESP" | grep -o "\"name\": *\"checkin\", *\"outcome\": *{[^}]*\"status\": *\"$1\"" 2>/dev/null | wc -l
+    }
+    n=$(echo "$RESP" | grep -o "\"name\": *\"checkin\"" 2>/dev/null | wc -l)
+    ok=$(count_status ok)
+    done_n=$(count_status already)
+    fail=$(count_status failed)
+    skip=$(count_status skipped)
+
+    SUMMARY="acc=$n"
+    [ "$ok" -gt 0 ] && SUMMARY="$SUMMARY 新签=$ok"
+    [ "$done_n" -gt 0 ] && SUMMARY="$SUMMARY 已签=$done_n"
+    [ "$fail" -gt 0 ] && SUMMARY="$SUMMARY 失败=$fail"
+    [ "$skip" -gt 0 ] && SUMMARY="$SUMMARY 跳过=$skip"
+    echo "$SUMMARY"
 }
 
 # 探测 busybox（找不到也不致命，会退化为 root 启动）
