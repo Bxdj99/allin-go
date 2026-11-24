@@ -89,6 +89,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/logs/clear", s.withAuth(s.handleLogsClear))
 	// 账号级积分统计：谁花了多少，随时可查
 	// 账号健康检测：明确区分「能用 / 额度尽 / 需重登」
+	// 重启网关（应用更新 / 手动重启用）
+	s.mux.HandleFunc("/api/restart", s.withAuth(s.handleRestart))
 	s.mux.HandleFunc("/api/accounts/probe", s.withAuth(s.handleAccountsProbe))
 	s.mux.HandleFunc("/api/accounts/usage", s.withAuth(s.handleAccountUsage))
 	s.mux.HandleFunc("/api/accounts/usage/reset", s.withAuth(s.handleAccountUsageReset))

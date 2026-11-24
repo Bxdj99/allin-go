@@ -332,8 +332,37 @@ fi
     last=""
     ticks=0
     while true; do
-        sleep 30
+        # 60 秒一轮。实测单轮开销约 0.01 秒 CPU（stime +1/100s），
+        # 主要是 ss 与 sed 的启动成本，不是这里多一个 [ -f ] 造成的。
+        # 从 30 秒放宽到 60 秒是为了少一半唤醒次数 —— 手机长期待机时，
+        # 唤醒次数比单次成本更影响耗电。
+        sleep 60
         ticks=$((ticks+1))
+
+        # 在线更新：网关以 shell(2000) 运行，没有 root 通道，
+        # 它只能把包放进 $STAGE。这里（root）负责发现并应用，
+        # 应用后重启网关，全程不需要用户干预。
+        if [ -f "$STAGE/allin-update.zip" ]; then
+            log "守护循环发现更新包，开始应用"
+            apply_staged_update
+            if [ -f "$MODDIR/bin/allin.pending" ]; then
+                OLDPID=$(ss -tlnp 2>/dev/null | grep ":$PORT" | grep -oE 'pid=[0-9]+' | cut -d= -f2 | head -1)
+                [ -n "$OLDPID" ] && kill -9 "$OLDPID" 2>/dev/null && sleep 1
+                mv -f "$MODDIR/bin/allin.pending" "$MODDIR/bin/allin" 2>/dev/null
+                cp -f "$MODDIR/bin/allin" "$RUNDIR/allin" 2>/dev/null
+                chown "$RUNAS:$RUNAS" "$RUNDIR/allin" 2>/dev/null
+                chmod 755 "$RUNDIR/allin" 2>/dev/null
+                log "更新已应用，重启网关"
+                start_gateway
+                n=0
+                while [ $n -lt 20 ]; do
+                    port_up && { log "网关已重启 $PORT"; break; }
+                    sleep 2
+                    n=$((n+1))
+                done
+            fi
+            sync_back
+        fi
 
         # 配置里的端口变了（用户从面板改的）→ 重启让新端口生效
         CFGPORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$RUNDATA/config.json" 2>/dev/null | head -1)
@@ -351,8 +380,8 @@ fi
             start_gateway
         fi
 
-        # 每 10 分钟把运行配置与日志回写模块目录
-        if [ $((ticks % 20)) -eq 0 ]; then
+        # 每 10 分钟把运行配置与日志回写模块目录（60 秒一轮 → %10）
+        if [ $((ticks % 10)) -eq 0 ]; then
             sync_back
         fi
 

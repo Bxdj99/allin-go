@@ -664,6 +664,7 @@
     <div class="btnrow" style="margin-top:8px">
       <button class="btn primary" id="btnCheckUpdate">检查更新</button>
       <button class="btn" id="btnApplyUpdate" hidden>立即更新</button>
+      <button class="btn" id="btnRestartGateway">重启网关</button>
     </div>
     <div class="dim" style="font-size:11px;margin-top:8px">
       从 GitHub Releases 拉取最新模块包。下载完成后<b>需要重启模块</b>（或在模块管理器里重新运行一次）才会真正应用，账号与配置不受影响。
@@ -1741,25 +1742,96 @@ async function checkUpdate() {
 
 async function applyUpdate() {
   const btn = el('btnApplyUpdate');
-  if (!confirm('确定更新？会从 GitHub 下载最新模块包并放入待应用目录（账号与配置保留），完成后需要重启模块。')) return;
+  if (!confirm('确定更新？会从 GitHub 下载最新模块包（账号与配置保留）。若网关有 root 通道，更新后会自动重启。')) return;
   btn.disabled = true;
-  el('verUpdate').innerHTML = '<span class="dim">正在下载并安装，请勿关闭页面…（大文件可能要 1-2 分钟）</span>';
+  el('verUpdate').innerHTML = '<span class="dim">正在下载，请勿关闭页面…（大文件可能要 1-2 分钟）</span>';
   try {
     const d = await api('/api/update/apply', { method: 'POST', body: {} });
-    if (d.ok) {
-      el('verUpdate').innerHTML =
-        '<div class="ok"><b>' + esc(d.message || '更新完成') + '</b></div>' +
-        '<div class="dim" style="font-size:12px;margin-top:6px">重启模块后，新版本才会真正运行。若提示未能自动应用，请到模块管理器点一次「运行」。</div>';
-      el('btnApplyUpdate').hidden = true;
-      toast('更新包已就绪，请重启模块', 'ok');
-    } else {
+    if (!d.ok) {
       el('verUpdate').innerHTML = '<span class="err">' + esc(d.error || '更新失败') + '</span>';
+      btn.disabled = false;
+      return;
+    }
+    el('btnApplyUpdate').hidden = true;
+
+    if (d.autoApply) {
+      el('verUpdate').innerHTML =
+        '<div class="ok"><b>' + esc(d.message) + '</b></div>' +
+        '<div class="dim" style="font-size:12px;margin-top:6px">' + esc(d.hint || '') + '</div>' +
+        '<div class="dim" style="font-size:12px;margin-top:6px">正在等待网关重启…</div>';
+      toast('更新完成，网关正在重启', 'ok');
+      // 等网关重启完再刷新页面，否则会看到「连接失败」
+      waitForGatewayBack(d.to);
+    } else {
+      el('verUpdate').innerHTML =
+        '<div class="ok"><b>' + esc(d.message) + '</b></div>' +
+        '<div class="dim" style="font-size:12px;margin-top:6px">' + esc(d.hint || '') + '</div>' +
+        '<div class="btnrow" style="margin-top:8px">' +
+        '<button class="btn primary" id="btnRestartAfterUpdate">重启网关</button>' +
+        '</div>';
+      toast('更新包已就绪', 'ok');
+      const b2 = el('btnRestartAfterUpdate');
+      if (b2) b2.addEventListener('click', doRestartGateway);
+      btn.disabled = false;
     }
   } catch (e) {
     el('verUpdate').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
     toast(e.message, 'err');
-  } finally { btn.disabled = false; }
+    btn.disabled = false;
+  }
 }
+
+// 等网关重启回来：轮询 /api/update/check，通了就刷新页面。
+// 网关重启通常 3~10 秒，这里最多等 60 秒。
+async function waitForGatewayBack(expectVersion) {
+  const startedAt = Date.now();
+  const deadline = startedAt + 60000;
+  let down = false;
+
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const r = await fetch('/api/update/check', { cache: 'no-store' });
+      if (!r.ok) continue;
+      const d = await r.json();
+      // 第一次连上说明网关已经回来；若版本还是旧的，可能是重启后仍在跑旧进程，再等一轮
+      if (expectVersion && d.current && d.current !== expectVersion) {
+        continue;
+      }
+      el('verUpdate').innerHTML =
+        '<div class="ok"><b>网关已重启，当前版本 ' + esc(d.current || '') + '</b></div>' +
+        '<div class="dim" style="font-size:12px;margin-top:6px">页面即将刷新…</div>';
+      toast('已更新到 ' + (d.current || '新版本'), 'ok');
+      setTimeout(() => location.reload(), 1200);
+      return;
+    } catch (e) {
+      down = true; // 连接失败 = 正在重启中，继续等
+    }
+  }
+
+  el('verUpdate').innerHTML =
+    '<div class="warn"><b>等不到网关重启回来</b></div>' +
+    '<div class="dim" style="font-size:12px;margin-top:6px">' +
+    '可能自动重启没成功。请到模块管理器点一次「运行」，或直接重启手机。' +
+    (down ? '' : '') + '</div>' +
+    '<div class="btnrow" style="margin-top:8px"><button class="btn" onclick="location.reload()">重新加载页面</button></div>';
+}
+
+async function doRestartGateway() {
+  if (!confirm('确定重启网关？正在处理的请求会被中断，约 5 秒后恢复。')) return;
+  try {
+    const d = await api('/api/restart', { method: 'POST', body: {} });
+    toast('网关正在重启…', 'ok');
+    el('verUpdate').innerHTML =
+      '<div class="ok"><b>正在重启</b></div>' +
+      '<div class="dim" style="font-size:12px;margin-top:6px">' + esc(d.reason || '') + '</div>';
+    waitForGatewayBack('');
+  } catch (e) {
+    toast('重启失败：' + e.message, 'err');
+  }
+}
+
+on('btnRestartGateway', 'click', doRestartGateway);
 
 // ---------- 思考强度 ----------
 async function loadEffort() {

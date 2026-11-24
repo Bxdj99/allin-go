@@ -126,19 +126,38 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	_ = os.Chmod(staged, 0o644)
 	_ = os.Chmod(stageDir, 0o777)
 
-	// 尽力触发一次 service.sh（有 root 通道时才会成功），失败也不影响结果：
-	// 用户重启模块或手机会自然应用。
-	triggered := tryTriggerServiceScript()
 	_ = os.Remove(tmp)
 
+	// 先把响应写出去，再安排重启。
+	//
+	// 顺序不能反：重启会 kill 掉本进程，如果先重启，这个响应就发不出去了，
+	// 前端只会看到一个网络错误，用户根本不知道更新成功了没有。
+	plan := planRestart()
+	canAuto := plan.Mode != ""
+
+	msg := "更新包已就绪"
+	hint := ""
+	if canAuto {
+		msg = "更新已下载，网关将在约 1 秒后自动重启并应用"
+		hint = plan.Reason
+	} else {
+		msg = "更新包已就绪，但当前无法自动重启"
+		hint = plan.Reason + "；请到模块管理器点一次「运行」，或在面板点「重启网关」。"
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":      true,
-		"from":    st.Current,
-		"to":      st.Latest,
-		"message": "更新包已就绪，重启模块（或重启手机）后自动应用",
-		"staged":  staged,
-		"applied": triggered,
+		"ok":        true,
+		"from":      st.Current,
+		"to":        st.Latest,
+		"message":   msg,
+		"hint":      hint,
+		"staged":    staged,
+		"autoApply": canAuto,
 	})
+
+	if canAuto {
+		scheduleRestart()
+	}
 }
 
 // checkUpdate 查询 GitHub 最新 release。
@@ -401,29 +420,6 @@ func updateTempDir() (string, error) {
 	return fallback, fmt.Errorf("找不到可写的临时目录（尝试过 %v，回退 %s 也可能不可写）", candidates, fallback)
 }
 
-// tryTriggerServiceScript 尝试以 root 身份跑一次 service.sh，让更新立刻生效。
-//
-// 网关本身是 shell(2000)，正常情况下没有 root 通道，这时返回 false，
-// 由用户重启模块生效——调用方必须把这一点如实告诉用户，不能假装已应用。
-func tryTriggerServiceScript() bool {
-	script := filepath.Join(moduleDir, "service.sh")
-	if _, err := os.Stat(script); err != nil {
-		return false
-	}
-	// 只有存在可用 su 时才尝试；不存在就静默跳过
-	for _, su := range []string{"/system/bin/su", "/system/xbin/su", "/debug_ramdisk/su"} {
-		if _, err := os.Stat(su); err != nil {
-			continue
-		}
-		cmd := exec.Command(su, "-c", "sh "+script)
-		cmd.Stdout = nil
-		cmd.Stderr = nil
-		if err := cmd.Start(); err == nil {
-			return true
-		}
-	}
-	return false
-}
 
 // copyFile 复制文件到目标路径（目标目录不存在会创建）。
 func copyFile(src, dst string) error {
