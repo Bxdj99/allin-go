@@ -43,6 +43,13 @@ type Server struct {
 	HistoryCompress *bool `json:"historyCompress,omitempty"`
 	// CompressKeepRecent 是压缩时保留最近的工具调用组数，默认 6。
 	CompressKeepRecent *int `json:"compressKeepRecent,omitempty"`
+	// CreditReserve 是「切号保底」开关。默认关闭。
+	//
+	// 开启后，剩余积分低于 CreditReserveAmount 的账号不再被派活，
+	// 相当于给每个号留一笔底仓，避免把号用到彻底枯竭。
+	CreditReserve *bool `json:"creditReserve,omitempty"`
+	// CreditReserveAmount 是保底保留的积分数，默认 20。
+	CreditReserveAmount *float64 `json:"creditReserveAmount,omitempty"`
 	// CreditStats 是积分消耗统计的总开关。默认开启。
 	//
 	// 开启后每次调用都会按账号累加 token 与积分，并定期落盘。
@@ -53,6 +60,19 @@ type Server struct {
 	// 设为正数时，请求里的 max_tokens / max_completion_tokens 会被封到这个值以内
 	// （只在客户端传得更大时才下调，不会把小的改大）。
 	MaxOutputTokens *int `json:"maxOutputTokens,omitempty"`
+}
+
+// CreditReserveEnabled 返回切号保底是否开启（未配置视为关闭）。
+func (s *Server) CreditReserveEnabled() bool {
+	return s.CreditReserve != nil && *s.CreditReserve
+}
+
+// CreditReserveValue 返回保底保留的积分数，默认 20。
+func (s *Server) CreditReserveValue() float64 {
+	if s.CreditReserveAmount == nil || *s.CreditReserveAmount < 0 {
+		return 20
+	}
+	return *s.CreditReserveAmount
 }
 
 // CreditStatsEnabled 返回积分消耗统计是否开启（未配置视为开启）。

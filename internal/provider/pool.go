@@ -60,6 +60,38 @@ type Pool struct {
 
 	// sessions 记录「会话 → 账号」绑定，供会话绑定策略使用。
 	sessions *sessionTable
+
+	// reserveMu 保护下面两个保底字段（配置可能热更新）。
+	reserveMu      sync.RWMutex
+	reserveOn      bool
+	reserveAmount  float64
+}
+
+// SetCreditReserve 设置「切号保底」：开启后余额低于 amount 的账号不再派活。
+// 由网关在启动时与配置热更新时调用。
+func (p *Pool) SetCreditReserve(on bool, amount float64) {
+	p.reserveMu.Lock()
+	defer p.reserveMu.Unlock()
+	p.reserveOn = on
+	if amount < 0 {
+		amount = 0
+	}
+	p.reserveAmount = amount
+}
+
+// creditFloor 返回当前生效的余额下限：
+//   - 保底关闭时就是 CreditsFloor（只挡住余额见底的号）
+//   - 保底开启时取 CreditsFloor 与 reserveAmount 的较大者
+//
+// 这样「保底」只是把门槛抬高，不会把原本的「够用」判断弄乱。
+func (p *Pool) creditFloor() float64 {
+	p.reserveMu.RLock()
+	on, amount := p.reserveOn, p.reserveAmount
+	p.reserveMu.RUnlock()
+	if on && amount > CreditsFloor {
+		return amount
+	}
+	return CreditsFloor
 }
 
 // NewPool 构造账号池。
@@ -145,7 +177,7 @@ func (p *Pool) accountUsable(prov *config.Provider, aid string, exclude map[stri
 		}
 		// 余额低于下限就换号，否则接下来必然失败
 		if st != nil && !st.creditsAt.IsZero() && now.Sub(st.creditsAt) <= creditsStale &&
-			st.remaining < CreditsFloor {
+			st.remaining < p.creditFloor() {
 			p.mu.Unlock()
 			return nil, false
 		}
@@ -191,7 +223,8 @@ func (p *Pool) pickRanked(prov *config.Provider, exclude map[string]bool, mode s
 	// rank 返回 true 表示 a 优于 b。
 	// 比较顺序：余额充足性 → 成功次数 → 到期紧急度 → 最久未用。
 	rank := func(a, b *config.Account, sa, sb *acctState) bool {
-		aReady, bReady := creditsReady(sa, now), creditsReady(sb, now)
+		floor := p.creditFloor()
+		aReady, bReady := creditsReady(sa, now, floor), creditsReady(sb, now, floor)
 		if aReady != bReady {
 			return aReady
 		}
@@ -288,14 +321,14 @@ func (p *Pool) pickRanked(prov *config.Provider, exclude map[string]bool, mode s
 // creditsReady 判断账号的积分快照是否可用参与排序：
 // 必须有新鲜快照，且余额不低于下限。没有快照时不参与积分排序，
 // 退回到原有的 least-used 行为，避免因为查不到积分就改变选号结果。
-func creditsReady(st *acctState, now time.Time) bool {
+func creditsReady(st *acctState, now time.Time, floor float64) bool {
 	if st == nil || st.creditsAt.IsZero() {
 		return false
 	}
 	if now.Sub(st.creditsAt) > creditsStale {
 		return false
 	}
-	return st.remaining >= CreditsFloor
+	return st.remaining >= floor
 }
 
 // creditPct 返回账号剩余额度比例（0~1）。无数据时返回 2（排后面）。
@@ -441,7 +474,7 @@ func (p *Pool) Snapshot() []map[string]any {
 		if !st.creditsAt.IsZero() {
 			row["creditsRemaining"] = st.remaining
 			row["creditsAgeSec"] = int64(now.Sub(st.creditsAt).Seconds())
-			row["creditsReady"] = creditsReady(st, now)
+			row["creditsReady"] = creditsReady(st, now, p.creditFloor())
 			if !st.resetAt.IsZero() {
 				row["creditsResetAt"] = st.resetAt.Format("2006-01-02 15:04")
 			}
@@ -483,7 +516,7 @@ func (p *Pool) pickLeastLoaded(prov *config.Provider, exclude map[string]bool) *
 			continue
 		}
 		if st != nil && !st.creditsAt.IsZero() && now.Sub(st.creditsAt) <= creditsStale &&
-			st.remaining < CreditsFloor {
+			st.remaining < p.creditFloor() {
 			continue
 		}
 		if fallback == nil {

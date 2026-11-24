@@ -133,6 +133,10 @@ func (s *Server) routes() {
 // Start 启动后台任务（Token 自动刷新巡检、WorkBuddy 积分快照刷新）。
 // ctx 取消时全部退出。
 func (s *Server) Start(ctx context.Context) {
+	// 把「切号保底」配置灌进账号池（余额低于保底值的号不再派活）
+	if cfg := s.store.Snapshot(); cfg != nil {
+		s.pool.SetCreditReserve(cfg.Server.CreditReserveEnabled(), cfg.Server.CreditReserveValue())
+	}
 	s.startTokenRefresher(ctx)
 	s.startCreditsRefresher(ctx)
 	// 账号用量：启动时从磁盘恢复，之后定期落盘
