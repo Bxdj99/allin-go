@@ -997,8 +997,15 @@ const LOADERS = {
   overview: async () => { await loadOverview(); await loadEffort(); await loadHealth(); await loadSchedule(); await loadPortNotice(); },
   providers: loadProviders,
   accounts: loadAccountsTab,
-  usage: async () => { await loadUsage(); await loadCreditStatsToggle(); await loadCreditStats(); await loadReserveSetting(); },
-  usage: loadUsage,
+  // 注意：同一个键只能定义一次。之前 usage 写了两次，
+  // 后一个 loadUsage 覆盖了前面，导致保底开关与积分统计的状态从不加载，
+  // 用户看到的就是「打开保底，返回再进来又变回关闭」。
+  usage: async () => {
+    await loadUsage();
+    await loadCreditStatsToggle();
+    await loadCreditStats();
+    await loadReserveSetting();
+  },
   logs: loadLogs,
   settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); await checkUpdate(); },
 };

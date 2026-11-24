@@ -383,6 +383,18 @@ fi
         # 每 10 分钟把运行配置与日志回写模块目录（60 秒一轮 → %10）
         if [ $((ticks % 10)) -eq 0 ]; then
             sync_back
+            # 顺带记一行今日签到状态，让日志能看出「今天到底跑没跑」。
+            #
+            # 只在有记录时写，不主动触发签到（那是计划时间的活），
+            # 也完全不发网络请求 —— 只是 grep 一下日志文件。
+            # 一天只写一次状态行，否则每 10 分钟一条，一天 144 行太吵。
+            TDAY=$(date +%Y%m%d)
+            if ! grep -q "签到汇总 $TDAY" "$LOG" 2>/dev/null; then
+                DONE=$(grep "workbuddy tasks slot=$TDAY-" "$LOG" 2>/dev/null | tail -1)
+                if [ -n "$DONE" ]; then
+                    echo "$(date '+%Y-%m-%d %H:%M:%S') 签到汇总 $TDAY: $(echo "$DONE" | sed 's/.*slot=[0-9-]* //')" >> "$LOG"
+                fi
+            fi
         fi
 
         H=$(date +%H)
