@@ -135,7 +135,7 @@ func (s *Server) routes() {
 func (s *Server) Start(ctx context.Context) {
 	// 把「切号保底」配置灌进账号池（余额低于保底值的号不再派活）
 	if cfg := s.store.Snapshot(); cfg != nil {
-		s.pool.SetCreditReserve(cfg.Server.CreditReserveEnabled(), cfg.Server.CreditReserveValue())
+		s.pool.SetCreditReserve(cfg.Server.CreditReserveEnabled(), cfg.Server.CreditReserveValue(), cfg.Server.CreditReserveStrictEnabled())
 	}
 	s.startTokenRefresher(ctx)
 	s.startCreditsRefresher(ctx)
@@ -374,6 +374,8 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	trimBudget := 0
 	// signatureRetried 记录因 thinking 签名问题而重发的次数（见下方 11159 处理）
 	signatureRetried := 0
+	// reserveBlocked 表示本次失败是「保底严格模式拦住了所有账号」
+	reserveBlocked := false
 	softRetries := 0
 
 	// WorkBuddy 需要请求体适配：工具名规范化、tool_choice 归一化、补 reasoning_effort
@@ -535,6 +537,11 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		for attempt := 0; attempt < maxAccountAttempts; attempt++ {
 			acct := s.pool.PickForSession(sp, tried, sessKey)
 			if acct == nil {
+				// 分清「没有账号可用」与「账号都被保底拦住了」：
+				// 后者是用户自己开的严格模式，报错要说清楚，否则会以为网关坏了。
+				if cfg.Server.CreditReserveEnabled() && cfg.Server.CreditReserveStrictEnabled() {
+					reserveBlocked = true
+				}
 				modelExhausted = true
 				break
 			}
@@ -737,6 +744,12 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	}
 
 	uc.fail("")
+	if reserveBlocked {
+		s.fail(w, http.StatusServiceUnavailable, fmt.Sprintf(
+			"所有账号的剩余积分都已低于保底值 %.1f，严格模式拒绝派活。"+
+				"可在「用量」页关闭切号保底或调低保底值。", cfg.Server.CreditReserveValue()))
+		return
+	}
 	if lastErrMsg != "" {
 		s.fail(w, http.StatusBadGateway, "所有账号与模型均失败，最后一次错误: "+lastErrMsg)
 	} else {

@@ -50,6 +50,12 @@ type Server struct {
 	CreditReserve *bool `json:"creditReserve,omitempty"`
 	// CreditReserveAmount 是保底保留的积分数，默认 20。
 	CreditReserveAmount *float64 `json:"creditReserveAmount,omitempty"`
+	// CreditReserveStrict 是保底严格模式。默认关闭。
+	//
+	// 关闭（默认）：所有账号都低于保底值时，仍会挑余额最高的那个用——
+	// 「尽量留底仓」，不至于让用户看到「全部不可用」。
+	// 打开：这种情况直接拒绝派活，宁可报错也不动底仓。
+	CreditReserveStrict *bool `json:"creditReserveStrict,omitempty"`
 	// CreditStats 是积分消耗统计的总开关。默认开启。
 	//
 	// 开启后每次调用都会按账号累加 token 与积分，并定期落盘。
@@ -73,6 +79,11 @@ func (s *Server) CreditReserveValue() float64 {
 		return 20
 	}
 	return *s.CreditReserveAmount
+}
+
+// CreditReserveStrictEnabled 返回保底严格模式是否开启（未配置视为关闭）。
+func (s *Server) CreditReserveStrictEnabled() bool {
+	return s.CreditReserveStrict != nil && *s.CreditReserveStrict
 }
 
 // CreditStatsEnabled 返回积分消耗统计是否开启（未配置视为开启）。

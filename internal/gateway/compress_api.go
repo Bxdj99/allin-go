@@ -22,6 +22,7 @@ func (s *Server) handleCompressGet(w http.ResponseWriter, r *http.Request) {
 		"creditStats":   cfg.Server.CreditStatsEnabled(),
 		"creditReserve": cfg.Server.CreditReserveEnabled(),
 		"reserveAmount": cfg.Server.CreditReserveValue(),
+		"reserveStrict": cfg.Server.CreditReserveStrictEnabled(),
 		"note":          "开启会把较早的工具调用摘要掉，减小请求体；但会改变 prompt 前缀，可能降低缓存命中率",
 	})
 }
@@ -39,6 +40,7 @@ func (s *Server) handleCompressSet(w http.ResponseWriter, r *http.Request) {
 		CreditStats   *bool    `json:"creditStats"`
 		CreditReserve *bool    `json:"creditReserve"`
 		ReserveAmount *float64 `json:"reserveAmount"`
+		ReserveStrict *bool    `json:"reserveStrict"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "JSON 解析失败: " + err.Error()})
@@ -49,7 +51,8 @@ func (s *Server) handleCompressSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Enabled == nil && in.KeepRecent == nil && in.MaxOutput == nil &&
-		in.CreditStats == nil && in.CreditReserve == nil && in.ReserveAmount == nil {
+		in.CreditStats == nil && in.CreditReserve == nil && in.ReserveAmount == nil &&
+		in.ReserveStrict == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "没有要修改的字段"})
 		return
 	}
@@ -87,6 +90,10 @@ func (s *Server) handleCompressSet(w http.ResponseWriter, r *http.Request) {
 		v := *in.ReserveAmount
 		cfg.Server.CreditReserveAmount = &v
 	}
+	if in.ReserveStrict != nil {
+		v := *in.ReserveStrict
+		cfg.Server.CreditReserveStrict = &v
+	}
 	if err := s.store.Save(cfg); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "保存失败: " + err.Error()})
 		return
@@ -101,6 +108,7 @@ func (s *Server) handleCompressSet(w http.ResponseWriter, r *http.Request) {
 		"creditStats":   cfg.Server.CreditStatsEnabled(),
 		"creditReserve": cfg.Server.CreditReserveEnabled(),
 		"reserveAmount": cfg.Server.CreditReserveValue(),
+		"reserveStrict": cfg.Server.CreditReserveStrictEnabled(),
 	})
 }
 
@@ -110,5 +118,5 @@ func (s *Server) applyCreditReserve(cfg *config.Config) {
 	if cfg == nil {
 		return
 	}
-	s.pool.SetCreditReserve(cfg.Server.CreditReserveEnabled(), cfg.Server.CreditReserveValue())
+	s.pool.SetCreditReserve(cfg.Server.CreditReserveEnabled(), cfg.Server.CreditReserveValue(), cfg.Server.CreditReserveStrictEnabled())
 }

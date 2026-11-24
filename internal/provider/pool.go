@@ -11,13 +11,13 @@ import (
 
 // 账号健康状态。上游 401/403 视为凭据失效，429/5xx 视为临时故障，两者冷却时长不同。
 const (
-	coolAuth      = 30 * time.Minute // 凭据失效：短时间内别再用
+	coolAuth = 30 * time.Minute // 凭据失效：短时间内别再用
 	// coolDeadCredential 是「凭据确定失效」的冷却时长。
 	// token 过期或账号被封不会自己好，继续每 10 分钟试一次纯属浪费。
 	coolDeadCredential = 7 * 24 * time.Hour
-	coolRateLimit = 2 * time.Minute  // 限流
-	coolServer    = 1 * time.Minute  // 上游 5xx
-	coolNetwork   = 30 * time.Second // 网络层错误
+	coolRateLimit      = 2 * time.Minute  // 限流
+	coolServer         = 1 * time.Minute  // 上游 5xx
+	coolNetwork        = 30 * time.Second // 网络层错误
 )
 
 // acctState 是单个账号的运行时状态（不落盘）。
@@ -61,15 +61,18 @@ type Pool struct {
 	// sessions 记录「会话 → 账号」绑定，供会话绑定策略使用。
 	sessions *sessionTable
 
-	// reserveMu 保护下面两个保底字段（配置可能热更新）。
-	reserveMu      sync.RWMutex
-	reserveOn      bool
-	reserveAmount  float64
+	// reserveMu 保护下面几个保底字段（配置可能热更新）。
+	reserveMu     sync.RWMutex
+	reserveOn     bool
+	reserveAmount float64
+	// reserveStrict 为真时，全部账号低于保底值就不派活（返回 nil）。
+	// 为假时退化为「挑余额最高的那个用」，避免用户看到「全部不可用」。
+	reserveStrict bool
 }
 
 // SetCreditReserve 设置「切号保底」：开启后余额低于 amount 的账号不再派活。
 // 由网关在启动时与配置热更新时调用。
-func (p *Pool) SetCreditReserve(on bool, amount float64) {
+func (p *Pool) SetCreditReserve(on bool, amount float64, strict bool) {
 	p.reserveMu.Lock()
 	defer p.reserveMu.Unlock()
 	p.reserveOn = on
@@ -77,6 +80,30 @@ func (p *Pool) SetCreditReserve(on bool, amount float64) {
 		amount = 0
 	}
 	p.reserveAmount = amount
+	p.reserveStrict = strict
+}
+
+// reserveActive 判断当前是否「保底生效」（开启且门槛确实被抬高）。
+func (p *Pool) reserveActive() bool {
+	p.reserveMu.RLock()
+	defer p.reserveMu.RUnlock()
+	return p.reserveOn && p.reserveAmount > CreditsFloor
+}
+
+// reserveIsStrict 判断严格模式是否开启。
+func (p *Pool) reserveIsStrict() bool {
+	p.reserveMu.RLock()
+	defer p.reserveMu.RUnlock()
+	return p.reserveStrict
+}
+
+// accountBelowReserve 判断账号是否「有余额快照且低于保底门槛」。
+// 没有快照的账号不算低于保底 —— 判断不了就不该拦。
+func (p *Pool) accountBelowReserve(st *acctState, now time.Time) bool {
+	if st == nil || st.creditsAt.IsZero() || now.Sub(st.creditsAt) > creditsStale {
+		return false
+	}
+	return st.remaining < p.creditFloor()
 }
 
 // creditFloor 返回当前生效的余额下限：
@@ -307,6 +334,14 @@ func (p *Pool) pickRanked(prov *config.Provider, exclude map[string]bool, mode s
 	if best == nil {
 		best = fallback
 	}
+	// 严格模式：选出来的账号若也低于保底值，就别派活。
+	// 这里覆盖两种情况——正常候选全被过滤掉后退到 fallback，
+	// 或者 fallback 本身就是个余额见底的号。
+	if best != nil && p.reserveActive() && p.reserveIsStrict() {
+		if p.accountBelowReserve(p.state[key(prov.ID, best.ID)], now) {
+			return nil
+		}
+	}
 	if best != nil {
 		st := p.state[key(prov.ID, best.ID)]
 		if st == nil {
@@ -492,7 +527,6 @@ type Stats struct {
 	Switches atomic.Int64
 }
 
-
 // pickLeastLoaded 取「已绑定会话数最少」的可用账号，用于 sticky 首次选号。
 // 完全跳过冷却中、被排除、余额不足的账号。
 func (p *Pool) pickLeastLoaded(prov *config.Provider, exclude map[string]bool) *config.Account {
@@ -525,6 +559,15 @@ func (p *Pool) pickLeastLoaded(prov *config.Provider, exclude map[string]bool) *
 		load := p.sessions.loadOf(a.ID)
 		if bestLoad < 0 || load < bestLoad {
 			best, bestLoad = a, load
+		}
+	}
+	// 严格模式：所有账号都低于保底值时，一个都不给。
+	// 注意 fallback 里记的是「第一个可用账号」，与余额无关，
+	// 所以这里必须显式判断，不能指望 fallback 为 nil。
+	if best == nil && p.reserveActive() && p.reserveIsStrict() {
+		if fallback != nil && p.accountBelowReserve(p.state[key(prov.ID, fallback.ID)], now) {
+			p.mu.Unlock()
+			return nil
 		}
 	}
 	if best != nil {

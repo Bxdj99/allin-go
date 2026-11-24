@@ -599,6 +599,13 @@
       <label>保底保留积分</label>
       <input id="fReserveAmount" type="number" min="0" max="1000000" step="1" value="20" style="width:140px">
     </div>
+    <div class="field">
+      <label>严格模式</label>
+      <div class="btnrow" style="margin:0">
+        <button class="btn sm" id="btnReserveStrict">—</button>
+        <span class="dim" id="reserveStrictHint" style="font-size:12px"></span>
+      </div>
+    </div>
     <div class="btnrow">
       <button class="btn primary" id="btnReserveToggle">开启保底</button>
       <button class="btn" id="btnReserveSave">保存保底值</button>
@@ -2829,6 +2836,36 @@ async function loadCreditStats() {
 
 on('btnCreditStatsRefresh', 'click', loadCreditStats);
 let _reserveOn = false;
+let _reserveStrict = false;
+
+function renderReserveStrict() {
+  const b = el('btnReserveStrict');
+  if (!b) return;
+  if (_reserveStrict) {
+    b.textContent = '关闭严格模式';
+    b.className = 'btn sm danger';
+    el('reserveStrictHint').innerHTML = '<span style="color:#ef4444">● 已开启</span>　全部账号低于保底时直接报错，不动底仓';
+  } else {
+    b.textContent = '开启严格模式';
+    b.className = 'btn sm';
+    el('reserveStrictHint').innerHTML = '<span class="dim">○ 已关闭</span>　全部低于保底时仍会挑一个用';
+  }
+}
+
+on('btnReserveStrict', 'click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const r = await api('/api/compress/set', { method: 'POST', body: { reserveStrict: !_reserveStrict } });
+    _reserveStrict = r.reserveStrict === true;
+    renderReserveStrict();
+    toast(_reserveStrict ? '已开启严格模式' : '已关闭严格模式', 'ok');
+  } catch (err) {
+    toast('切换失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 function renderReserveToggle() {
   const b = el('btnReserveToggle');
@@ -2848,8 +2885,10 @@ async function loadReserveSetting() {
   try {
     const d = await api('/api/compress');
     _reserveOn = d.creditReserve === true;
+    _reserveStrict = d.reserveStrict === true;
     el('fReserveAmount').value = d.reserveAmount != null ? d.reserveAmount : 20;
     renderReserveToggle();
+    renderReserveStrict();
   } catch (e) { /* 读不到按默认显示 */ }
 }
 

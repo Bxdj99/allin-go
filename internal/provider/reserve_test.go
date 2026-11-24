@@ -37,7 +37,7 @@ func TestReserveOnSkipsLowBalance(t *testing.T) {
 	p.SetCredits(pid, "low", 5, time.Now().Add(time.Hour))
 	p.SetCredits(pid, "rich", 100, time.Now().Add(time.Hour))
 
-	p.SetCreditReserve(true, 20)
+	p.SetCreditReserve(true, 20, false)
 
 	for i := 0; i < 4; i++ {
 		a := p.PickForSession(pr, nil, "")
@@ -59,7 +59,7 @@ func TestReserveAmountCustom(t *testing.T) {
 	p.SetCredits(pid, "low", 5, time.Now().Add(time.Hour))
 	p.SetCredits(pid, "rich", 100, time.Now().Add(time.Hour))
 
-	p.SetCreditReserve(true, 3)
+	p.SetCreditReserve(true, 3, false)
 
 	seen := map[string]bool{}
 	for i := 0; i < 4; i++ {
@@ -78,7 +78,7 @@ func TestReserveAllBelowStillPicks(t *testing.T) {
 	pr := prov(pid, acct("a"), acct("b"))
 	p.SetCredits(pid, "a", 5, time.Now().Add(time.Hour))
 	p.SetCredits(pid, "b", 10, time.Now().Add(time.Hour))
-	p.SetCreditReserve(true, 20)
+	p.SetCreditReserve(true, 20, false)
 
 	if a := p.PickForSession(pr, nil, ""); a == nil {
 		t.Fatal("全部低于保底时也应返回一个账号，不能返回 nil")
@@ -88,7 +88,7 @@ func TestReserveAllBelowStillPicks(t *testing.T) {
 // 保底值不能把门槛降到 CreditsFloor 以下
 func TestReserveAmountBelowFloor(t *testing.T) {
 	p := NewPool()
-	p.SetCreditReserve(true, 0.1)
+	p.SetCreditReserve(true, 0.1, false)
 	if got := p.creditFloor(); got != CreditsFloor {
 		t.Fatalf("保底小于基础门槛时应取 %v，实际 %v", CreditsFloor, got)
 	}
