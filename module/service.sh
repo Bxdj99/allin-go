@@ -70,6 +70,14 @@ prepare() {
         log "缺少二进制：$MODDIR/bin/allin"
         return 1
     fi
+    # 上次在线更新留下的脚本，先落地（不能在运行中覆盖自己）
+    if [ -f "$MODDIR/service.sh.pending" ]; then
+        cp -f "$MODDIR/service.sh.pending" "$MODDIR/service.sh" 2>/dev/null &&
+            chmod 755 "$MODDIR/service.sh" 2>/dev/null &&
+            rm -f "$MODDIR/service.sh.pending" 2>/dev/null &&
+            log "已应用新的 service.sh"
+    fi
+
     # 在线更新：网关以 shell(2000) 运行，写不了 $MODDIR（root 所有）。
     # 它把更新包放到 $STAGE（shell 可写），由这里以 root 身份应用。
     apply_staged_update
@@ -173,8 +181,17 @@ apply_staged_update() {
     if [ -f "$WORK/module.prop" ]; then
         cp -f "$WORK/module.prop" "$MODDIR/module.prop" 2>/dev/null
     fi
-    # 脚本类文件直接覆盖（不是运行中的可执行文件，可以直接替换）
-    for f in service.sh action.sh uninstall.sh; do
+    # 脚本类文件覆盖。
+    #
+    # service.sh 例外：本进程正在执行它，覆盖会让「正在跑的旧逻辑」
+    # 和「磁盘上的新脚本」不一致，下次开机行为才切换，容易让人以为更新没生效。
+    # 所以先写成 .pending，下次启动时由下面统一替换。
+    if [ -f "$WORK/service.sh" ]; then
+        cp -f "$WORK/service.sh" "$MODDIR/service.sh.pending" 2>/dev/null &&
+            chmod 755 "$MODDIR/service.sh.pending" 2>/dev/null &&
+            log "已放置新 service.sh（pending，下次启动替换）"
+    fi
+    for f in action.sh uninstall.sh; do
         [ -f "$WORK/$f" ] && cp -f "$WORK/$f" "$MODDIR/$f" 2>/dev/null && chmod 755 "$MODDIR/$f" 2>/dev/null
     done
 
