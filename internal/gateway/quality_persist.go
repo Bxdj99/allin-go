@@ -22,14 +22,19 @@ import (
 
 const (
 	qualityFileName     = "quality-stats.json"
-	qualitySaveInterval = 2 * time.Minute
+	qualitySaveInterval = 30 * time.Second
+	// qualityFlushDelay 是「变更后多久落盘」。
+	// 5 秒窗口足够把一轮请求的变更合并成一次写，
+	// 又不至于在 kill -9 时丢掉太多。
+	qualityFlushDelay = 5 * time.Second
 )
 
 var (
-	qualitySaveMu   sync.Mutex
-	qualityDirty    bool
-	qualityPath     string
-	qualitySaveOnce sync.Once
+	qualitySaveMu       sync.Mutex
+	qualityDirty        bool
+	qualityFlushPending bool
+	qualityPath         string
+	qualitySaveOnce     sync.Once
 )
 
 // qualitySnapshot 是落盘格式。
@@ -53,11 +58,28 @@ type qualityReqSnapshot struct {
 	Attempts int64 `json:"attempts"`
 }
 
-// markQualityDirty 标记有变更待落盘。
+// markQualityDirty 标记有变更待落盘，并在 5 秒后异步写一次。
+//
+// 为什么要 debounce 而不是等定时器：进程被 kill -9 时收不到信号，
+// 定期落盘会丢掉最后一次写盘之后的全部数据。
+// 5 秒窗口足够把一轮请求的变更合并成一次写，又不至于丢太多。
 func markQualityDirty() {
 	qualitySaveMu.Lock()
 	qualityDirty = true
+	already := qualityFlushPending
+	qualityFlushPending = true
 	qualitySaveMu.Unlock()
+
+	if already {
+		return
+	}
+	go func() {
+		time.Sleep(qualityFlushDelay)
+		qualitySaveMu.Lock()
+		qualityFlushPending = false
+		qualitySaveMu.Unlock()
+		saveQuality()
+	}()
 }
 
 // qualityFilePath 计算落盘路径（与 config.json 同目录）。
@@ -189,4 +211,16 @@ func (s *Server) startQualitySaver(done <-chan struct{}) {
 			}
 		}()
 	})
+}
+
+// FlushQuality 立即把统计写盘。
+//
+// 为什么要单独暴露：进程被 kill 时 ctx 不一定来得及走完，
+// 定期落盘会丢掉最后一段。实测过 —— 重启后 requests 从 11 掉回 7，
+// 因为磁盘上还是 30 秒前的快照。
+func FlushQuality() {
+	qualitySaveMu.Lock()
+	qualityDirty = true // 强制写一次
+	qualitySaveMu.Unlock()
+	saveQuality()
 }

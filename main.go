@@ -94,6 +94,10 @@ func main() {
 		log.Printf("收到信号 %v，正在退出", sig)
 	}
 
+	// 退出前把统计刷盘：被 kill 时 ctx 不一定来得及走完，
+	// 定期落盘会丢掉最后一段（实测重启后 requests 从 11 掉回 7）。
+	gateway.FlushQuality()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	if err := httpSrv.Shutdown(ctx); err != nil {
