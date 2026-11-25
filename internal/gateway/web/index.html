@@ -197,7 +197,27 @@
   @keyframes tin { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
 
   /* 页面切换 */
-  .page { display:none; }
+    /* 可折叠卡片：默认收起，点标题展开。用来收纳细节，保持页面简洁 */
+  .fold { border-bottom:1px solid var(--line); }
+  .fold:last-child { border-bottom:none; }
+  .fold > summary {
+    list-style:none; cursor:pointer; padding:10px 0;
+    display:flex; align-items:center; gap:8px; user-select:none;
+  }
+  .fold > summary::-webkit-details-marker { display:none; }
+  .fold > summary::before {
+    content:'▸'; color:var(--dim); font-size:12px; transition:transform .15s; flex:none;
+  }
+  .fold[open] > summary::before { transform:rotate(90deg); }
+  .fold > summary .fold-title { font-weight:600; }
+  .fold > summary .fold-badge {
+    font-size:11px; padding:1px 6px; border-radius:8px; flex:none;
+    background:rgba(127,127,127,.15);
+  }
+  .fold > summary .fold-hint { font-size:12px; color:var(--dim); margin-left:auto; flex:none; }
+  .fold-body { padding:0 0 12px 20px; font-size:13px; }
+
+.page { display:none; }
   .page.active { display:block; }
   .mchk.probed-ok { border-color:#3fb950 !important; }
   .mchk.probed-bad { opacity:.6; }
@@ -651,43 +671,69 @@
   </div>
 
   <div class="card">
-    <h2>积分去向与请求质量</h2>
-    <div class="dim" style="font-size:12px;margin-bottom:10px">
-      这几项统计<b>不受上面的日志开关影响</b>，始终累计（只存内存，重启清零）。
-      关掉日志也能看，用来回答「积分到底花在哪」。
+    <h2>积分去向</h2>
+    <details class="fold">
+      <summary>
+        <span class="fold-title">请求质量</span>
+        <span class="fold-badge" id="qBadge">—</span>
+        <span class="fold-hint">点开看错误分布与裁剪收益</span>
+      </summary>
+      <div class="fold-body">
+        <div id="qualitySummary" class="dim">点「刷新」加载</div>
+        <div class="dim" style="font-size:12px;margin-top:8px">
+          <b>真错误</b>已剔除「额度耗尽」与「窗口限流」——那两个是账号状态，不是故障。<br>
+          <b>平均尝试</b>大于 1.5 说明换号频繁。
+        </div>
+      </div>
+    </details>
+    <details class="fold">
+      <summary>
+        <span class="fold-title">工具占用</span>
+        <span class="fold-badge" id="tBadge">—</span>
+        <span class="fold-hint">点开看谁在空耗 token</span>
+      </summary>
+      <div class="fold-body">
+        <div id="toolUsageSummary" class="dim" style="margin-bottom:8px"></div>
+        <input id="toolFilter" placeholder="搜索工具名…" style="width:100%;margin-bottom:8px">
+        <div style="margin-bottom:8px">
+          <button class="btn" id="btnToolAll" style="font-size:12px">全部</button>
+          <button class="btn" id="btnToolIdle" style="font-size:12px">只看闲置</button>
+          <button class="btn" id="btnToolUsed" style="font-size:12px">只看用过</button>
+        </div>
+        <div id="toolUsageList" style="max-height:360px;overflow:auto"></div>
+        <div class="dim" style="font-size:12px;margin-top:6px">
+          标「闲置」= 声明过但从没被调用，每轮都在为它付 token。
+        </div>
+      </div>
+    </details>
+    <div class="dim" style="font-size:12px;margin-top:8px">
+      以上统计不受日志开关影响（只存内存，重启清零）。
     </div>
-    <div id="qualitySummary" class="dim">点「刷新」加载</div>
-    <div class="hint" style="margin-top:10px">
-      <b>realErrors</b> 已剔除「额度耗尽」和「窗口限流」——那两个是账号状态，不是故障。<br>
-      <b>裁剪节省</b> 是上下文裁剪省下的 token 占比；<b>平均尝试</b> 大于 1.5 说明换号频繁。
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>工具使用（谁在空耗 token）</h2>
-    <div class="dim" style="font-size:12px;margin-bottom:10px">
-      工具定义每轮都发，且位于报文最前面。标 <b>[闲置]</b> 的工具「声明过但从没被调用」，
-      每轮都在为它付 token。想省就去客户端关掉对应的 MCP 或插件。
-    </div>
-    <div id="toolUsageSummary" class="dim" style="margin-bottom:8px">点「刷新」加载</div>
-    <div id="toolUsageList" style="max-height:320px;overflow:auto"></div>
   </div>
 </section>
 
 <section class="page" id="page-settings">
   <div class="card">
-    <h2>换号策略（会影响积分成本，改前先看优缺点）</h2>
-    <div class="dim" style="font-size:12px;margin-bottom:12px">
-      换号能让负载分摊、避开死号，但<b>每次换号都会让上游前缀缓存失效</b> ——
-      整段输入从约 10% 计价变成全价。长会话里一次换号的代价可能相当于十次请求。
-      下面每一项都写了优点和缺点，按你的用法选。
-    </div>
-    <div id="switchPolicyList" class="dim">加载中…</div>
-    <div class="btnrow" style="margin-top:12px">
-      <button class="btn primary" id="btnSwitchSave">保存换号策略</button>
-      <button class="btn" id="btnSwitchRefresh">刷新</button>
-      <span class="dim" id="switchState" style="font-size:12px"></span>
-    </div>
+    <h2>换号策略</h2>
+    <details class="fold">
+      <summary>
+        <span class="fold-title">换号与保底</span>
+        <span class="fold-badge" id="swBadge">—</span>
+        <span class="fold-hint">点开调整</span>
+      </summary>
+      <div class="fold-body">
+        <div class="dim" style="font-size:12px;margin-bottom:10px">
+          每次换号都会让上游前缀缓存失效（整段输入从约 10% 计价变全价）。
+          长会话里一次换号的代价可能相当于十次请求。
+        </div>
+        <div id="switchPolicyList" class="dim">加载中…</div>
+        <div class="btnrow" style="margin-top:12px">
+          <button class="btn primary" id="btnSwitchSave">保存</button>
+          <button class="btn" id="btnSwitchRefresh">刷新</button>
+          <span class="dim" id="switchState" style="font-size:12px"></span>
+        </div>
+      </div>
+    </details>
   </div>
 
   <div class="card">
@@ -2712,6 +2758,17 @@ function riskLabel(r) {
 function renderSwitchPolicy() {
   const box = el('switchPolicyList');
   if (!_switchOptions.length) { box.innerHTML = '<div class="dim">暂无</div>'; return; }
+
+  // 徽标只放最关心的两个值，不用展开就能看到
+  const badge = el('swBadge');
+  if (badge) {
+    const amt = _switchOptions.find(o => o.key === 'reserveAmount');
+    const lb = _switchOptions.find(o => o.key === 'loadBalance');
+    badge.textContent = '保底 ' + (amt ? amt.current : '-')
+      + ' · 负载均衡 ' + (lb && lb.current ? '开' : '关');
+    badge.style.color = (lb && lb.current) ? '#f59e0b' : '#22c55e';
+  }
+
   box.innerHTML = _switchOptions.map(o => {
     const id = 'sw_' + o.key;
     let input;
@@ -2790,14 +2847,22 @@ async function loadQuality() {
     const d = r.data || {};
     const errs = d.errors || {};
     const keys = Object.keys(errs).sort((a, b) => errs[b] - errs[a]);
+
+    // 徽标只看最要紧的两个数，不用展开
+    const real = d.realErrors || 0;
+    const badge = el('qBadge');
+    if (badge) {
+      badge.textContent = real > 0 ? '真错误 ' + real : '正常';
+      badge.style.color = real > 0 ? '#ef4444' : '#22c55e';
+    }
+
     const errHtml = keys.length
       ? keys.map(k => k + ' <b>' + errs[k] + '</b>').join(' · ')
       : '无';
     el('qualitySummary').innerHTML =
-      '<div>请求 <b>' + (d.requests || 0) + '</b> 次，上游尝试 <b>' + (d.attempts || 0)
-      + '</b> 次，平均 <b>' + (d.avgAttempts ? d.avgAttempts.toFixed(2) : '0') + '</b> 次/请求</div>'
-      + '<div style="margin-top:6px">真错误 <b style="color:#ef4444">' + (d.realErrors || 0) + '</b>'
-      + '<span class="dim">（已剔除额度耗尽与限流）</span></div>'
+      '<div>请求 <b>' + (d.requests || 0) + '</b> 次 · 上游尝试 <b>' + (d.attempts || 0)
+      + '</b> 次 · 平均 <b>' + (d.avgAttempts ? d.avgAttempts.toFixed(2) : '0') + '</b> 次/请求</div>'
+      + '<div style="margin-top:6px">真错误 <b style="color:#ef4444">' + real + '</b></div>'
       + '<div style="margin-top:6px">错误分布：' + errHtml + '</div>'
       + '<div style="margin-top:6px">裁剪 <b>' + (d.trimHits || 0) + '</b> 次，省下 <b>'
       + (d.trimSaved || 0).toLocaleString() + '</b> token'
@@ -2808,172 +2873,72 @@ async function loadQuality() {
 }
 
 // 工具使用：谁在空耗 token
+let _toolRows = [];
+let _toolFilter = 'idle'; // all / idle / used
+
 async function loadToolUsage() {
   try {
     const r = await api('/api/tools/usage');
     const s = r.summary || {};
-    const rows = r.rows || [];
+    _toolRows = r.rows || [];
     el('toolUsageSummary').innerHTML =
-      '工具 <b>' + (s.total || 0) + '</b> 个，用过 <b>' + (s.usedEver || 0) + '</b> 个，'
-      + '纯成本 <b style="color:#f59e0b">' + (s.idle || 0) + '</b> 个'
-      + '<span class="dim">（覆盖 ' + (s.requests || 0) + ' 次请求）</span>';
-    if (!rows.length) {
-      el('toolUsageList').innerHTML = '<div class="dim">还没有数据，发起几次请求后再看</div>';
-      return;
+      '共 <b>' + (s.total || 0) + '</b> 个工具 · 用过 <b>' + (s.usedEver || 0) + '</b> 个 · '
+      + '闲置 <b style="color:#f59e0b">' + (s.idle || 0) + '</b> 个'
+      + '<span class="dim">（统计 ' + (s.requests || 0) + ' 次请求）</span>';
+
+    const badge = el('tBadge');
+    if (badge) {
+      badge.textContent = '闲置 ' + (s.idle || 0) + '/' + (s.total || 0);
+      badge.style.color = (s.idle || 0) > 0 ? '#f59e0b' : '#22c55e';
     }
-    const maxShow = 60;
-    el('toolUsageList').innerHTML = rows.slice(0, maxShow).map(t => {
-      const idle = t.idle;
-      return '<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--line)">'
-        + '<span style="width:52px;flex:none;' + (idle ? 'color:#f59e0b' : '') + '">'
-        + (idle ? '[闲置]' : '') + '</span>'
-        + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
-        + esc(t.name) + '</span>'
-        + '<span class="dim" style="flex:none">声明 ' + t.declared + ' · 用了 ' + t.used + '</span>'
-        + '</div>';
-    }).join('') + (rows.length > maxShow
-      ? '<div class="dim" style="padding:6px 0">还有 ' + (rows.length - maxShow) + ' 个未显示</div>'
-      : '');
+    renderToolList();
   } catch (e) {
     el('toolUsageList').innerHTML = '<span class="err">加载失败：' + esc(e.message) + '</span>';
   }
 }
 
-function renderLogToggle() {
-  const b = el('btnLogToggle');
-  if (_logsEnabled) {
-    b.textContent = '关闭日志';
-    b.className = 'btn';
-    el('logState').innerHTML = '<span style="color:#22c55e">● 正在记录</span>';
-  } else {
-    b.textContent = '开启日志';
-    b.className = 'btn primary';
-    el('logState').innerHTML = '<span class="dim">○ 已关闭（不写日志、不采样）</span>';
-  }
-}
-
-function renderLogSummary(s) {
-  if (!s.count) {
-    el('logSummary').innerHTML = '<span class="dim">还没有采样。' +
-      (_logsEnabled ? '发一次请求后点「刷新」。' : '日志开关是关着的，先点「开启日志」。') + '</span>';
+function renderToolList() {
+  const box = el('toolUsageList');
+  if (!_toolRows.length) {
+    box.innerHTML = '<div class="dim">还没有数据，发起几次请求后再看</div>';
     return;
   }
-  const cells = [
-    ['样本数', s.count, ''],
-    ['平均', fmtMs(s.avgMs), msClass(s.avgMs)],
-    ['P50', fmtMs(s.p50Ms), msClass(s.p50Ms)],
-    ['P90', fmtMs(s.p90Ms), msClass(s.p90Ms)],
-    ['最慢', fmtMs(s.maxMs), msClass(s.maxMs)],
-    ['平均上游', fmtMs(s.avgUpstreamMs), ''],
-    ['平均网关开销', fmtMs(s.avgOverheadMs), msClass(s.avgOverheadMs)],
-    ['换号次数', s.retried, s.retried ? 'warn' : ''],
-    ['超 3s 次数', s.slowCount, s.slowCount ? 'err' : ''],
-  ];
-  el('logSummary').innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px">' +
-    cells.map(c => '<div style="padding:10px;border-radius:8px;background:rgba(127,127,127,.10)">' +
-      '<div class="dim" style="font-size:11px">' + c[0] + '</div>' +
-      '<div class="' + c[2] + '" style="font-size:17px;font-weight:600;margin-top:2px">' + c[1] + '</div></div>').join('') +
-    '</div>';
-}
+  const kw = (el('toolFilter') && el('toolFilter').value || '').trim().toLowerCase();
+  let rows = _toolRows;
+  if (_toolFilter === 'idle') rows = rows.filter(t => t.idle);
+  else if (_toolFilter === 'used') rows = rows.filter(t => !t.idle && t.used > 0);
+  if (kw) rows = rows.filter(t => t.name.toLowerCase().indexOf(kw) >= 0);
 
-function renderLogSamples(list) {
-  if (!list.length) {
-    el('logSamples').innerHTML = '<span class="dim">暂无数据</span>';
+  if (!rows.length) {
+    box.innerHTML = '<div class="dim">没有匹配的工具</div>';
     return;
   }
-  // 倒序：最新的在最上面
-  const rows = list.slice().reverse().map(s => {
-    const t = new Date(s.at * 1000);
-    const hh = String(t.getHours()).padStart(2, '0');
-    const mm = String(t.getMinutes()).padStart(2, '0');
-    const ss = String(t.getSeconds()).padStart(2, '0');
-    const retry = s.attempts > 1 ? '<span class="warn">换号×' + s.attempts + '</span>' : '';
-    const st = s.status >= 400 ? '<span class="err">' + s.status + '</span>' : s.status;
-    return '<tr>' +
-      '<td>' + hh + ':' + mm + ':' + ss + '</td>' +
-      '<td>' + esc(s.model || '-') + '</td>' +
-      '<td style="font-size:11px">' + esc(s.account || '-') + '</td>' +
-      '<td class="' + msClass(s.totalMs) + '">' + fmtMs(s.totalMs) + '</td>' +
-      '<td>' + fmtMs(s.upstreamMs) + '</td>' +
-      '<td class="' + msClass(s.overheadMs) + '">' + fmtMs(s.overheadMs) + '</td>' +
-      '<td>' + st + '</td>' +
-      '<td>' + retry + '</td>' +
-      '</tr>';
-  }).join('');
-  el('logSamples').innerHTML =
-    '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">' +
-    '<thead><tr style="text-align:left;color:inherit;opacity:.6">' +
-    '<th>时间</th><th>模型</th><th>账号</th><th>总耗时</th><th>上游</th><th>网关开销</th><th>状态</th><th>重试</th>' +
-    '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  // 不再截断：全量渲染，配合搜索与过滤，182 条也就几十 KB
+  box.innerHTML = rows.map(t => {
+    const idle = t.idle;
+    return '<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--line);align-items:baseline">'
+      + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
+      + (idle ? 'color:#f59e0b' : '') + '">' + esc(t.name) + '</span>'
+      + '<span class="dim" style="flex:none;font-size:12px">'
+      + (idle ? '闲置' : '用了 ' + t.used + ' 次') + '</span>'
+      + '</div>';
+  }).join('') + '<div class="dim" style="padding:6px 0;font-size:12px">共 ' + rows.length + ' 个</div>';
 }
 
-/* ===================== 历史压缩 ===================== */
-
-let _compressEnabled = true;
-
-async function loadCompress() {
-  try {
-    const d = await api('/api/compress');
-    _compressEnabled = !!d.enabled;
-    el('fKeepRecent').value = d.keepRecent != null ? d.keepRecent : 6;
-    el('fTrimBudget').value = d.trimBudget != null ? d.trimBudget : 0;
-    el('fMaxOutput').value = d.maxOutput != null ? d.maxOutput : 0;
-    renderCompressToggle();
-  } catch (e) {
-    el('compressState').innerHTML = '<span class="err">加载失败：' + esc(e.message) + '</span>';
-  }
+function setToolFilter(mode) {
+  _toolFilter = mode;
+  ['btnToolAll', 'btnToolIdle', 'btnToolUsed'].forEach(id => {
+    const b = el(id); if (!b) return;
+    const m = id === 'btnToolAll' ? 'all' : id === 'btnToolIdle' ? 'idle' : 'used';
+    b.className = m === mode ? 'btn primary' : 'btn';
+  });
+  renderToolList();
 }
 
-function renderCompressToggle() {
-  const b = el('btnCompressToggle');
-  if (!b) return;
-  if (_compressEnabled) {
-    b.textContent = '关闭压缩';
-    b.className = 'btn';
-    el('compressState').innerHTML = '<span style="color:#22c55e">● 已开启</span>（较早的工具调用会被摘要）';
-  } else {
-    b.textContent = '开启压缩';
-    b.className = 'btn primary';
-    el('compressState').innerHTML = '<span class="dim">○ 已关闭</span>（全部历史原样发送，缓存命中更稳定）';
-  }
-}
-
-on('btnCompressToggle', 'click', async (e) => {
-  const btn = e.currentTarget;
-  btn.disabled = true;
-  try {
-    const r = await api('/api/compress/set', { method: 'POST', body: { enabled: !_compressEnabled } });
-    _compressEnabled = !!r.enabled;
-    renderCompressToggle();
-    toast(_compressEnabled ? '已开启历史压缩' : '已关闭历史压缩', 'ok');
-  } catch (err) {
-    toast('切换失败：' + err.message, 'err');
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-on('btnCompressSave', 'click', async (e) => {
-  const btn = e.currentTarget;
-  const n = parseInt(el('fKeepRecent').value, 10);
-  const mo = parseInt(el('fMaxOutput').value, 10) || 0;
-  if (isNaN(n) || n < 0 || n > 200) { toast('保留组数需在 0-200 之间', 'err'); return; }
-  if (mo < 0 || mo > 2000000) { toast('输出上限需在 0-2000000 之间', 'err'); return; }
-  btn.disabled = true;
-  try {
-    const tb = parseInt(el('fTrimBudget').value, 10) || 0;
-    if (tb < 0 || tb > 2000000) { toast('裁剪预算需在 0-2000000 之间', 'err'); return; }
-    const r = await api('/api/compress/set', { method: 'POST', body: { keepRecent: n, maxOutput: mo, trimBudget: tb } });
-    _compressEnabled = !!r.enabled;
-    renderCompressToggle();
-    toast('已保存：保留 ' + r.keepRecent + ' 组，输出上限 ' + (r.maxOutput || '不限')
-      + '，裁剪预算 ' + (r.trimBudget ? r.trimBudget + ' tokens' : '默认 95 万'), 'ok');
-  } catch (err) {
-    toast('保存失败：' + err.message, 'err');
-  } finally {
-    btn.disabled = false;
-  }
-});
+on('btnToolAll', 'click', () => setToolFilter('all'));
+on('btnToolIdle', 'click', () => setToolFilter('idle'));
+on('btnToolUsed', 'click', () => setToolFilter('used'));
+on('toolFilter', 'input', renderToolList);
 
 on('btnLogToggle', 'click', async (e) => {
   const btn = e.currentTarget;
