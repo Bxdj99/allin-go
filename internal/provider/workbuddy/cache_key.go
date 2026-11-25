@@ -43,12 +43,28 @@ func InjectPromptCacheKey(body []byte, uid, sessionKey string) []byte {
 		return body
 	}
 
-	// 2) body 内的会话标识优先于网关推断
-	conv := sessionKey
-	if v := strField(obj, "conversation_id"); v != "" {
-		conv = v
-	} else if v := strField(obj, "conversationId"); v != "" {
-		conv = v
+	// 2) 客户端自带的会话标识优先于网关推断。
+	//
+	// 顺序对齐上游 QoderProtocol.java:39：
+	//   agent 明说的会话 → 客户端 prompt_cache_key → 客户端 user → 网关推断
+	//
+	// 为什么必须认这么多字段：agent 类客户端每轮带全量历史，
+	// 一旦 key 每轮都变，前缀缓存全部失效，按全量 prompt 计费 ——
+	// 这正是「输入 6.7 亿 token、输出只有 67 万」的来源。
+	// 让 key 稳定比让 key 唯一重要得多。
+	conv := ""
+	for _, k := range []string{
+		"conversation_id", "conversationId", "conversation",
+		"session_id", "sessionId", "chat_id", "chatId",
+		"thread_id", "threadId", "user",
+	} {
+		if v := strField(obj, k); v != "" {
+			conv = v
+			break
+		}
+	}
+	if conv == "" {
+		conv = sessionKey
 	}
 
 	obj["prompt_cache_key"] = buildCacheKey(uid, conv)
