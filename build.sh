@@ -41,7 +41,8 @@ mkdir -p module/bin
 cp "$OUT" module/bin/allin
 chmod 755 module/bin/allin
 rm -f "$MODZIP"
-( cd module && zip -q -r "../$MODZIP" module.prop service.sh action.sh uninstall.sh bin/allin )
+( cd module && zip -q -r "../$MODZIP" module.prop service.sh action.sh uninstall.sh \
+    guard.sh watchdog.sh boot-completed.sh bin/allin )
 
 ZSIZE=$(ls -lh "$MODZIP" | awk '{print $5}')
 echo "    $MODZIP  $ZSIZE"

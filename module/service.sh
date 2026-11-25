@@ -36,6 +36,8 @@ RUNDATA="$RUNDIR/data"
 LOG="$MODDIR/allin.log"
 GWLOG="$MODDIR/gateway.log"
 RUNLOG="$RUNDIR/gateway.log"
+# 自动任务哨兵：网关每次保存配置时写的单行 key=value，供下面的守护循环读取。
+SCHED_STATE="$RUNDATA/schedule.state"
 # 端口从配置读（首次安装会自动选一个空闲端口，避开 Magpie 等占用的 3425）
 PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' /data/local/tmp/allin-run/data/config.json 2>/dev/null | head -1)
 [ -z "$PORT" ] && PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$MODDIR/data/config.json" 2>/dev/null | head -1)
@@ -106,6 +108,11 @@ prepare() {
     if [ -f "$MODDATA/config.json" ] && { [ ! -f "$RUNDATA/config.json" ] || [ "$MODDATA/config.json" -nt "$RUNDATA/config.json" ]; }; then
         cp -f "$MODDATA/config.json" "$RUNDATA/config.json" 2>/dev/null
         log "配置已同步到运行目录"
+    fi
+    # 运行目录里没有哨兵（首次升级 / 被清掉）但模块目录有 → 补回去
+    if [ ! -f "$SCHED_STATE" ] && [ -f "$MODDATA/schedule.state" ]; then
+        cp -f "$MODDATA/schedule.state" "$SCHED_STATE" 2>/dev/null &&
+            chown "$RUNAS:$RUNAS" "$SCHED_STATE" 2>/dev/null
     fi
     # 首次刷入时两边都没配置：网关启动时会自己生成（随机口令），
     # 启动成功后由下面的 sync_back 立刻回写到模块目录，保证「运行」键能读到。
@@ -252,6 +259,10 @@ sync_back() {
     if [ -f "$RUNDATA/config.json" ]; then
         cp -f "$RUNDATA/config.json" "$MODDATA/config.json" 2>/dev/null
     fi
+    # 哨兵也回写一份到模块目录，便于重启后即使运行目录被清掉也能恢复
+    if [ -f "$SCHED_STATE" ]; then
+        cp -f "$SCHED_STATE" "$MODDATA/schedule.state" 2>/dev/null
+    fi
     if [ -s "$RUNLOG" ]; then
         tail -n 500 "$RUNLOG" >> "$GWLOG" 2>/dev/null
         : > "$RUNLOG" 2>/dev/null
@@ -328,129 +339,23 @@ else
 fi
 
 # ---- 常驻守护 + 每日签到 + 配置回写 ----
-(
-    last=""
-    ticks=0
-    while true; do
-        # 60 秒一轮。实测单轮开销约 0.01 秒 CPU（stime +1/100s），
-        # 主要是 ss 与 sed 的启动成本，不是这里多一个 [ -f ] 造成的。
-        # 从 30 秒放宽到 60 秒是为了少一半唤醒次数 —— 手机长期待机时，
-        # 唤醒次数比单次成本更影响耗电。
-        sleep 60
-        ticks=$((ticks+1))
+#
+# 逻辑全部搬到了同目录的 guard.sh，原因见该文件头部注释：
+# 原来这里是一个匿名后台子 shell，父脚本 exit 之后靠 init 收养，
+# 没有会话保护，被系统回收时会静默消失 —— 而网关进程还在跑，
+# 于是「网关看起来正常、自动签到就是不执行」。
+# 线上真实发生过：守护循环消失后，第二天 9 点的签到窗口没人触发。
+#
+# 现在 guard.sh 独立运行、自己写 pid 文件、由 watchdog.sh 兜底重启。
+if [ -f "$MODDIR/guard.sh" ]; then
+    setsid sh "$MODDIR/guard.sh" > /dev/null 2>&1 < /dev/null &
+else
+    log "缺少 guard.sh，自动任务不会执行（请重刷模块）"
+fi
 
-        # 在线更新：网关以 shell(2000) 运行，没有 root 通道，
-        # 它只能把包放进 $STAGE。这里（root）负责发现并应用，
-        # 应用后重启网关，全程不需要用户干预。
-        if [ -f "$STAGE/allin-update.zip" ]; then
-            log "守护循环发现更新包，开始应用"
-            apply_staged_update
-            if [ -f "$MODDIR/bin/allin.pending" ]; then
-                OLDPID=$(ss -tlnp 2>/dev/null | grep ":$PORT" | grep -oE 'pid=[0-9]+' | cut -d= -f2 | head -1)
-                [ -n "$OLDPID" ] && kill -9 "$OLDPID" 2>/dev/null && sleep 1
-                mv -f "$MODDIR/bin/allin.pending" "$MODDIR/bin/allin" 2>/dev/null
-                cp -f "$MODDIR/bin/allin" "$RUNDIR/allin" 2>/dev/null
-                chown "$RUNAS:$RUNAS" "$RUNDIR/allin" 2>/dev/null
-                chmod 755 "$RUNDIR/allin" 2>/dev/null
-                log "更新已应用，重启网关"
-                start_gateway
-                n=0
-                while [ $n -lt 20 ]; do
-                    port_up && { log "网关已重启 $PORT"; break; }
-                    sleep 2
-                    n=$((n+1))
-                done
-            fi
-            sync_back
-        fi
-
-        # 配置里的端口变了（用户从面板改的）→ 重启让新端口生效
-        CFGPORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$RUNDATA/config.json" 2>/dev/null | head -1)
-        if [ -n "$CFGPORT" ] && [ "$CFGPORT" != "$PORT" ]; then
-            log "端口配置变更 $PORT → $CFGPORT，重启网关"
-            OLDPID=$(ss -tlnp 2>/dev/null | grep ":$PORT" | grep -oE 'pid=[0-9]+' | cut -d= -f2 | head -1)
-            [ -n "$OLDPID" ] && kill -9 "$OLDPID" 2>/dev/null
-            PORT="$CFGPORT"
-            sleep 1
-            start_gateway
-        fi
-
-        if ! port_up; then
-            log "网关掉线，重拉"
-            start_gateway
-        fi
-
-        # 每 10 分钟把运行配置与日志回写模块目录（60 秒一轮 → %10）
-        if [ $((ticks % 10)) -eq 0 ]; then
-            sync_back
-            # 顺带记一行今日签到状态，让日志能看出「今天到底跑没跑」。
-            #
-            # 只在有记录时写，不主动触发签到（那是计划时间的活），
-            # 也完全不发网络请求 —— 只是 grep 一下日志文件。
-            # 一天只写一次状态行，否则每 10 分钟一条，一天 144 行太吵。
-            TDAY=$(date +%Y%m%d)
-            if ! grep -q "签到汇总 $TDAY" "$LOG" 2>/dev/null; then
-                DONE=$(grep "workbuddy tasks slot=$TDAY-" "$LOG" 2>/dev/null | tail -1)
-                if [ -n "$DONE" ]; then
-                    echo "$(date '+%Y-%m-%d %H:%M:%S') 签到汇总 $TDAY: $(echo "$DONE" | sed 's/.*slot=[0-9-]* //')" >> "$LOG"
-                fi
-            fi
-        fi
-
-        H=$(date +%H)
-        slot="$(date +%Y%m%d)-$H"
-
-        # 读自动任务开关。
-        #
-        # 字段在 schedule.autoCheckin，不是顶层 —— 面板写的是 schedule 对象。
-        # 以前读顶层，永远读不到，于是无论面板怎么关都按「开启」处理。
-        AC=$(sed -n 's/.*"autoCheckin"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$RUNDATA/config.json" 2>/dev/null | head -1)
-        [ -z "$AC" ] && AC=true
-
-        # 执行小时同样从 schedule.checkinHours 读，默认 9 与 21。
-        # 面板上改过时间的话，这里要跟着变，否则改了没用。
-        HOURS=$(sed -n 's/.*"checkinHours"[[:space:]]*:[[:space:]]*\[\([0-9, ]*\)\].*/\1/p' "$RUNDATA/config.json" 2>/dev/null | tr -d ' ' | head -1)
-        [ -z "$HOURS" ] && HOURS="9,21"
-
-        # 判断当前小时是否在计划内
-        IN_HOURS=false
-        for hh in $(echo "$HOURS" | tr ',' ' '); do
-            # 去掉前导零再比，避免 08 与 8 不等
-            hh=$((hh+0))
-            if [ "$hh" = "$((H+0))" ]; then IN_HOURS=true; break; fi
-        done
-        if [ "$AC" = "true" ] && [ "$IN_HOURS" = "true" ] && [ "$last" != "$slot" ]; then
-            K=$(sed -n 's/.*"authKey"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$RUNDATA/config.json" 2>/dev/null | head -1)
-            if [ -n "$K" ]; then
-                # 全套任务：一次请求跑完 report/checkin/streak/gift/comp/travel/lottery。
-                # 每账号最多 3 分钟，账号多时整体会久一点，故 -m 给到 300。
-                # 返回体落一行摘要进日志，方便事后核对谁成功谁跳过。
-                RESP=$(curl -s -m 300 -X POST "$API" \
-                    -H "Authorization: Bearer $K" \
-                    -H 'Content-Type: application/json' -d '{}' 2>/dev/null)
-                # 只记 ok 看不出跑了哪些任务 —— 用户反馈「自动任务好像不是全套」
-                # 时无从核对。这里把每账号的任务名与结果都落一行摘要。
-                # 不能匹配 '"ok"'：响应体里逐任务都有 ok 字段，恒命中，
-                # 于是「全部任务失败」也被记成 ok（线上反馈过这个坑）。
-                # 改看顶层 "ok":true —— 它是 failedCount==0 的汇总结论。
-                case "$RESP" in
-                    *'"ok":true'*)
-                        log "workbuddy tasks slot=$slot ok $(summarize_tasks "$RESP")"
-                        ;;
-                    *'"ok":false'*)
-                        log "workbuddy tasks slot=$slot 有任务失败 $(summarize_tasks "$RESP")"
-                        ;;
-                    *)
-                        log "workbuddy tasks slot=$slot 返回异常: $(echo "$RESP" | cut -c1-200)"
-                        ;;
-                esac
-                sync_back
-            else
-                log "workbuddy tasks slot=$slot 跳过：配置里读不到 authKey"
-            fi
-            last="$slot"
-        fi
-    done
-) &
+# 看门狗：守护循环万一还是没了，5 分钟内把它拉回来。
+if [ -f "$MODDIR/watchdog.sh" ]; then
+    setsid sh "$MODDIR/watchdog.sh" > /dev/null 2>&1 < /dev/null &
+fi
 
 exit 0

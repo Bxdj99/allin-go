@@ -135,15 +135,30 @@ func (s *Server) handleWorkBuddyTasks(w http.ResponseWriter, r *http.Request) {
 			}
 			if !opt.NoCheckin {
 				// 注入既有签到实现：闭包捕获 origin 与账号指针，返回 Outcome。
+				// 注意 doCheckin 只发请求、不写配置，签到记录必须由这里回写。
+				// 早期版本从 s.store.Snapshot() 取账号去调 doCheckin，
+				// 而 Snapshot 是深拷贝——写完就丢，cfg 里的 CheckinDate 永远不更新，
+				// 于是面板签到日期一直停在旧日期，看起来像「从来没签到过」。
+				// 这里改为：请求用快照账号（拿最新凭据），回写落到本轮持有的 cfg 上。
 				opts.Checkin = func(ctx context.Context) workbuddy.Outcome {
-					cur := findAccount(s.store.Snapshot(), p.ID, accID)
-					if cur == nil {
+					live := findAccount(s.store.Snapshot(), p.ID, accID)
+					if live == nil {
 						return workbuddy.Outcome{Status: workbuddy.OutcomeFailed, Message: "账号已被移除"}
 					}
-					credit, streak, outcome, err := s.doCheckin(origin, cur)
+					credit, streak, outcome, err := s.doCheckin(origin, live)
 					if err != nil {
 						return workbuddy.Outcome{Status: workbuddy.OutcomeFailed, Message: err.Error()}
 					}
+
+					// 回写签到记录到本轮的 cfg（而不是那个用完即弃的快照）。
+					if cur := findAccount(cfg, p.ID, accID); cur != nil {
+						cur.CheckinDate = today()
+						cur.CheckinOutcome = outcome
+						cur.CheckinCredit = credit
+						cur.CheckinStreak = streak
+						changed = true
+					}
+
 					status := workbuddy.OutcomeOK
 					msg := "签到成功"
 					if outcome == "already" {

@@ -399,6 +399,10 @@ func (s *Store) load() error {
 			return err
 		}
 	}
+	// 已有配置升级上来时走不到上面的 saveLocked，哨兵文件可能不存在。
+	// shell 侧读不到哨兵会回退成默认值（把用户手动关掉的自动任务又打开），
+	// 所以加载后无条件重写一次；幂等且很便宜。
+	_ = s.writeScheduleStateLocked()
 	return nil
 }
 
@@ -486,7 +490,64 @@ func (s *Store) saveLocked() error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		return err
+	}
+	// 哨兵文件不是主配置，写失败不能影响保存结果（旧版脚本还能靠回退跑）。
+	_ = s.writeScheduleStateLocked()
+	return nil
+}
+
+// ScheduleStateName 是自动任务哨兵文件名，与 config.json 同目录。
+//
+// 为什么要有这个文件：service.sh 是 busybox ash + busybox sed，
+// 而 config.json 是 MarshalIndent 出来的多行缩进 JSON。
+// 用 sed 逐行正则去抠多行 JSON 里的字段既脆弱又踩过坑——
+// 早期写给 autoCheckin 的正则用了 BRE 的 `\|` 分支，
+// 而 busybox sed 不支持 `\|`，于是开关永远读不到、永远回退成 true，
+// 面板上「关闭自动任务」从来不起作用。
+//
+// 所以由 Go 侧在每次保存时顺手写一个单行、无空格、键序固定的哨兵文件，
+// 让 shell 只需要最朴素的 `key=value` 切分即可，彻底避开 JSON 解析。
+//
+// 格式（每行一个，顺序固定）：
+//
+//	autoCheckin=1
+//	checkinHours=9,21
+const ScheduleStateName = "schedule.state"
+
+// writeScheduleStateLocked 写自动任务哨兵文件（调用方已持有锁）。
+func (s *Store) writeScheduleStateLocked() error {
+	auto := 0
+	if s.cfg != nil && s.cfg.Schedule.AutoCheckinEnabled() {
+		auto = 1
+	}
+	var hours []int
+	if s.cfg != nil {
+		hours = s.cfg.Schedule.Hours()
+	} else {
+		hours = []int{9, 21}
+	}
+	parts := make([]string, 0, len(hours))
+	for _, h := range hours {
+		if h < 0 || h > 23 {
+			continue
+		}
+		parts = append(parts, strconv.Itoa(h))
+	}
+	if len(parts) == 0 {
+		parts = []string{"9", "21"}
+	}
+
+	body := "autoCheckin=" + strconv.Itoa(auto) + "\n" +
+		"checkinHours=" + strings.Join(parts, ",") + "\n"
+
+	path := filepath.Join(filepath.Dir(s.path), ScheduleStateName)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // FindProvider 按 id 找供应商。
