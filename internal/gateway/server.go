@@ -614,6 +614,10 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 			uc.onLoad = func(tokens float64) {
 				loadOnce.Do(func() { releaseLoad(tokens) })
 			}
+			// 命中率回写：保底判断据此决定「值不值得为保余额换号」。
+			uc.onCacheRate = func(cacheRead, prompt int64, known bool) {
+				s.pool.RecordCacheRate(provID, acctID, cacheRead, prompt, known)
+			}
 			prevRelease = func(float64) { loadOnce.Do(func() { releaseLoad(0) }) }
 
 			// 注入 prompt_cache_key —— 省积分的关键一步。

@@ -60,6 +60,19 @@ const creditsStale = 2 * time.Minute
 // 一次普通对话也就几千 token，小于这个数量级的差异不值得改变选号结果。
 const loadTie = 2000.0
 
+// cacheKeepMinHitRate 是「值得为缓存而保留账号」的最低命中率。
+//
+// 取值依据：命中部分的成本约为未命中的 1/10。
+// 命中率 h 时的相对成本 ≈ h*0.1 + (1-h)。
+//
+//	h=90% → 0.19（省 81%）
+//	h=50% → 0.55（省 45%）
+//	h=30% → 0.73（省 27%）
+//
+// 取 50% 作为门槛：此时换号至少要多花 45% 的输入成本，
+// 而保底想守住的那点余额几乎不可能补回这笔差价。
+const cacheKeepMinHitRate = 0.5
+
 // Pool 管理所有供应商的账号选择与健康状态。
 //
 // 选择策略：
@@ -266,6 +279,26 @@ func (p *Pool) accountUsable(prov *config.Provider, aid string, exclude map[stri
 		// 代价是长对话可能中途换号，换号后上游 prompt cache 会失效一次
 		// （上下文由网关侧维护，对话本身不会断）。
 		if st != nil && p.shouldSwitchAway(st, now) {
+			// 缓存优先：命中率高的会话换号代价极大。
+			//
+			// 实测（同一会话 54.9 万 token）：
+			//   留在原账号（余额 47，命中 99.9%）→ 等效约 5.5 万 token
+			//   切到新账号（余额 1500，命中 0%） → 实际 54.9 万 token
+			// 为保住 47 积分而多花 10 倍 token，明显是亏的。
+			rate, known := p.CacheHealth(prov.ID, aid)
+			if known && rate >= cacheKeepMinHitRate {
+				log.Printf("[RESERVE] %s 余额 %.0f 低于门槛 %.0f，但缓存命中 %.0f%%，继续用（换号会丢缓存）",
+					aid, st.remaining, p.creditFloor(), rate*100)
+				// 保持可用：不换号，继续沿用。下面走和正常路径一样的收尾。
+				if st == nil {
+					st = &acctState{}
+					p.state[key(prov.ID, aid)] = st
+				}
+				st.lastUsed = now
+				p.mu.Unlock()
+				_ = a
+				return a, true
+			}
 			p.mu.Unlock()
 			if p.creditUnknown(st, now) {
 				log.Printf("[RESERVE] %s 余额快照过期，严格模式下解绑换号", aid)
@@ -820,4 +853,9 @@ func (p *Pool) ChargeLoad(pid, aid string, tokens float64) {
 // LoadOf 返回账号当前负载，供诊断与面板展示。
 func (p *Pool) LoadOf(pid, aid string) float64 {
 	return p.load.Load(key(pid, aid))
+}
+
+// RecordCacheRate 由网关在记账时调用，记录账号的缓存命中情况。
+func (p *Pool) RecordCacheRate(pid, aid string, cacheRead, prompt int64, known bool) {
+	recordCacheRate(pid, aid, cacheRead, prompt, known)
 }

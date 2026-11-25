@@ -321,6 +321,9 @@ type usageCtx struct {
 	// 为什么放在记账点：这里是唯一拿到「本次到底花了多少 token」的地方。
 	// 选号调度器按它打分，才能把重活摊开 —— 只按请求次数轮转是轻重大小不分的。
 	onLoad func(tokens float64)
+
+	// onCacheRate 把本次命中情况喂给账号池，供保底判断参考。
+	onCacheRate func(cacheRead, prompt int64, known bool)
 }
 
 // newUsageCtx 为一条客户端请求建记账上下文。
@@ -372,6 +375,11 @@ func (c *usageCtx) record(usageProvider, usageModel string, ok bool, u usageToke
 		if known {
 			log.Printf("[CACHE] acct=%s in=%d cached=%d write=%d hit=%.1f%%",
 				c.accountID, u.In, u.CacheRead, u.CacheWrite, rate*100)
+			// 喂给保底判断：命中率高时不该为了保余额而换号，
+			// 换号等于把整段输入从 10% 计价变全价。
+			if c.onCacheRate != nil {
+				c.onCacheRate(u.CacheRead, int64(u.In), true)
+			}
 		}
 	}
 
