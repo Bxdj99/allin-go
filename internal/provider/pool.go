@@ -467,7 +467,23 @@ func (p *Pool) Success(pid, aid string) {
 }
 
 // Fail 记录一次失败，并按状态码决定冷却时长。
+//
+// 只知道状态码时用这个；如果手上有 429 的响应体，
+// 请用 FailWithBody —— 它能区分「额度用尽」与「窗口限流」。
 func (p *Pool) Fail(pid, aid string, status int, reason string) {
+	p.fail(pid, aid, status, reason, "")
+}
+
+// FailWithBody 与 Fail 相同，但会解析 429 响应体来决定冷却时长。
+//
+// 为什么要区分：实测 451 次 429 全部是 code 14018「额度已用尽」，
+// 那是不会自愈的状态。按限流冷却 2 分钟的话，
+// 每 2 分钟就会拿一个没额度的号去打一次上游，纯浪费。
+func (p *Pool) FailWithBody(pid, aid string, status int, reason, errBody string) {
+	p.fail(pid, aid, status, reason, errBody)
+}
+
+func (p *Pool) fail(pid, aid string, status int, reason, errBody string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	st := p.state[key(pid, aid)]
@@ -484,6 +500,22 @@ func (p *Pool) Fail(pid, aid string, status int, reason string) {
 		cool = coolAuth
 	case status == 429:
 		cool = coolRateLimit
+		now := time.Now()
+		switch {
+		case IsCreditExhausted(errBody):
+			// 额度用尽：不会自己恢复。用冷却凭据的时长，
+			// 等用户充值或额度周期重置后再试。
+			st.coolUntil = now.Add(coolDeadCredential)
+			st.lastFailure = "额度已用尽"
+			return
+		default:
+			// 真正的窗口限流：冷却到上游给出的重置时刻。
+			if reset := QuotaWindowResetAt(errBody, now); !reset.IsZero() {
+				st.coolUntil = reset
+				st.lastFailure = "频率限制，等待窗口重置"
+				return
+			}
+		}
 	case status >= 500:
 		cool = coolServer
 	default:

@@ -3,9 +3,9 @@
 package gateway
 
 import (
+	"bufio"
 	"bytes"
 	"context"
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -617,19 +617,29 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				//
 				// 必须放在 RetryForbidden 之前判断——这类拒绝同样带 retry:false，
 				// 但它属于「换个请求体就能过」，与「别重试」是两回事。
-				// 上游对历史里的 thinking 块做签名校验，别处签发的一律不认，
-				// 而去掉之后同一段历史就能通过。
-				if kind == provider.KindWorkBuddy && signatureRetried < maxSignatureRetries &&
-					workbuddy.IsSignatureRefusal(resp.StatusCode, string(sniff)) {
-					if stripped := workbuddy.WithoutThinkingBlocks(stepBody); stripped != nil {
+				//
+				// v1.37.0 起改用 DecideSignatureRetry，与上游判定对齐：
+				//   - 只认 HTTP 400（其它 4xx 改请求体也不会过，重发是白烧额度）
+				//   - 命中 signature / redacted_thinking 这类保护性历史就放弃
+				//   - 只删「空且无签名」的 thinking 块，不再无差别清空思考内容
+				if kind == provider.KindWorkBuddy && signatureRetried < maxSignatureRetries {
+					d := workbuddy.DecideSignatureRetry(resp.StatusCode, string(sniff), stepBody,
+						workbuddy.IsEnterpriseAccount(acct))
+					if d.Retry {
 						resp.Body.Close()
 						signatureRetried++
-						stepBody = stripped
-						log.Printf("thinking 签名失效，去掉 thinking 块后重发（第 %d 次）: %s/%s",
+						stepBody = d.Body
+						log.Printf("thinking 签名失效，去掉空 thinking 块后重发（第 %d 次）: %s/%s",
 							signatureRetried, sp.ID, acct.ID)
 						// 同一账号、同一 attempt 重发，不消耗换号次数
 						attempt--
 						continue
+					}
+					// 命中签名拒绝但决定不重发时，把原因记下来：
+					// 「为什么这次没像以前那样自动恢复」是最常见的疑问。
+					if d.Reason != workbuddy.StopNotSignatureRejection &&
+						d.Reason != workbuddy.StopStatusNotRetryable {
+						log.Printf("thinking 签名拒绝但不重发（%s）: %s/%s", d.Reason, sp.ID, acct.ID)
 					}
 				}
 
@@ -703,7 +713,9 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				resp.Body.Close()
 				bodyText := string(raw)
 				uc.fail(sp.ID, step.Model)
-				s.pool.Fail(sp.ID, acct.ID, resp.StatusCode, truncate(bodyText, 160))
+				// 传响应体：429 时要区分「额度用尽」（长期）和「窗口限流」
+				// （冷却到上游给的重置时刻），否则每 2 分钟就重打一次没额度的号。
+				s.pool.FailWithBody(sp.ID, acct.ID, resp.StatusCode, truncate(bodyText, 160), bodyText)
 				s.pool.UnbindSession(sessKey)
 				lastErrMsg = truncate(bodyText, 200)
 				log.Printf("上游 %d，换号: %s/%s", resp.StatusCode, sp.ID, acct.ID)
