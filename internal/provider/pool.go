@@ -292,13 +292,51 @@ func (p *Pool) pickRanked(prov *config.Provider, exclude map[string]bool, mode s
 	var bestState *acctState
 	var fallback *config.Account
 	var fallbackUntil time.Time
+	// lowFallback 记住「余额不足但其它方面可用」的第一个账号。
+	// 非严格模式下如果全都不足，就退回用它 —— 旧行为是「不会让用户看到全部不可用」。
+	var lowFallback *config.Account
+	var lowFallbackState *acctState
+
+	// creditCoverage：只有当**所有候选**都有新鲜额度时，才允许拿额度来排序。
+	//
+	// 这是上游 AccountRoutingPolicy.java:107-118 的语义，也是我们曾经的坑：
+	// 旧实现逐个账号判 creditsReady，于是在「A 有新鲜快照、B 快照过期」时
+	// 直接让 A 压过 B —— 等于把「未知」当成「比 A 少」，
+	// 积分刷新一断就会把流量全压到少数几个有数据的号上。
+	// 覆盖率不全时统一退回 token/轮转指标，谁也不因「查不到」而吃亏。
+	creditCoverage := true
+	{
+		floor := p.creditFloor()
+		checked := 0
+		for _, a := range prov.Accounts {
+			if a == nil || !a.IsEnabled() || a.Key() == "" {
+				continue
+			}
+			if exclude != nil && exclude[a.ID] {
+				continue
+			}
+			st := p.state[key(prov.ID, a.ID)]
+			if st != nil && now.Before(st.coolUntil) {
+				continue
+			}
+			checked++
+			if !creditsReady(st, now, floor) {
+				creditCoverage = false
+				break
+			}
+		}
+		if checked == 0 {
+			creditCoverage = false
+		}
+	}
 
 	// rank 返回 true 表示 a 优于 b。
-	// 比较顺序：余额充足性 → 成功次数 → 到期紧急度 → 最久未用。
+	// 比较顺序：余额充足性（仅在覆盖率完整时）→ 成功次数 → 到期紧急度 → 最久未用。
 	rank := func(a, b *config.Account, sa, sb *acctState) bool {
 		floor := p.creditFloor()
 		aReady, bReady := creditsReady(sa, now, floor), creditsReady(sb, now, floor)
-		if aReady != bReady {
+		// 覆盖率不完整时不比余额充足性：未知不等于不足。
+		if creditCoverage && aReady != bReady {
 			return aReady
 		}
 		// 按路由策略决定比较顺序。
@@ -368,6 +406,26 @@ func (p *Pool) pickRanked(prov *config.Provider, exclude map[string]bool, mode s
 			}
 			continue
 		}
+		// 余额明确不够（或严格模式下余额未知）的账号在候选阶段就剔除。
+		//
+		// 这一步和下面的 rank 分工不同，别合并：
+		//   这里判「够不够用」——低于门槛就是不够，是确定事实，与覆盖率无关；
+		//   rank 比「谁更富余」——只有全部候选都有新鲜读数时才可比。
+		//
+		// 旧实现完全没有这一步，保底只靠函数末尾那一道 strict 检查，
+		// 于是非严格模式下余额不足的号照样被选中。
+		//
+		// 只在这个账号**确实有读数且低于门槛**时剔除；
+		// 余额未知交给严格模式决定（非严格视为可用，避免「全部不可用」）。
+		if st != nil && !p.creditUnknown(st, now) && st.remaining < p.creditFloor() {
+			if lowFallback == nil {
+				lowFallback, lowFallbackState = a, st
+			}
+			continue
+		}
+		if st != nil && p.creditUnknown(st, now) && p.reserveActive() && p.reserveIsStrict() {
+			continue
+		}
 		if best == nil {
 			best, bestState = a, st
 			continue
@@ -379,6 +437,12 @@ func (p *Pool) pickRanked(prov *config.Provider, exclude map[string]bool, mode s
 
 	if best == nil {
 		best = fallback
+	}
+	// 连冷却兜底都没有，说明候选全被余额过滤掉了。
+	// 非严格模式退回余额最低门槛的那个（旧行为：不让用户看到「全部不可用」）；
+	// 严格模式保持 nil，由下面统一拒绝。
+	if best == nil && !p.reserveIsStrict() {
+		best, bestState = lowFallback, lowFallbackState
 	}
 	// 严格模式：选出来的账号若也低于保底值，就别派活。
 	// 这里覆盖两种情况——正常候选全被过滤掉后退到 fallback，
