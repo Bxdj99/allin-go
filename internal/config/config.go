@@ -218,6 +218,13 @@ type Provider struct {
 	//   "balance"    用量均衡：优先用完额度比例最低的账号
 	//   "expiry"     到期优先：优先用完最早过期的额度
 	RouteMode string `json:"routeMode,omitempty"`
+
+	// PreferredAccountID 是「优先账号」：只要它可用就一直优先用它。
+	//
+	// 为什么需要：换号会让上游前缀缓存失效（整段输入从约 10% 计价变全价）。
+	// 把主力账号钉死，缓存能长期命中，比多账号分摊更省。
+	// 留空表示不指定，走 RouteMode 的规则。
+	PreferredAccountID string `json:"preferredAccountId,omitempty"`
 }
 
 // 路由策略常量。

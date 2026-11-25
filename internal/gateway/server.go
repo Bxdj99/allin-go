@@ -101,6 +101,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/tools/usage", s.withAuth(s.handleToolUsage))
 	// 换号策略：六类触发点的开关与阈值，附优缺点说明。
 	s.mux.HandleFunc("/api/switch-policy", s.withAuth(s.handleSwitchPolicy))
+	// 选号规则：四种策略 + 优先账号，附优缺点说明。
+	s.mux.HandleFunc("/api/routing-rules", s.withAuth(s.handleRoutingRules))
 	s.mux.HandleFunc("/api/accounts/export", s.withAuth(s.handleAccountsExport))
 	s.mux.HandleFunc("/api/accounts/import", s.withAuth(s.handleAccountsImport))
 	s.mux.HandleFunc("/api/effort", s.withAuth(s.handleEffort))

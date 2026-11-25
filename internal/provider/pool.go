@@ -230,6 +230,21 @@ func (p *Pool) PickForSession(prov *config.Provider, exclude map[string]bool, se
 		return nil
 	}
 
+	// 优先账号：只要它可用就一直用它。
+	//
+	// 这条优先于所有策略，理由是最省的用法：换号会让上游前缀缓存失效，
+	// 整段输入从约 10% 计价变全价（实测同一会话 54.9 万 token 差 10 倍）。
+	// 把主力号钉死，缓存能长期命中，比多账号分摊省得多。
+	//
+	// 不可用时（冷却/余额不足/被排除）照常往下走，不会卡死。
+	if prov.PreferredAccountID != "" {
+		if acct, ok := p.accountUsable(prov, prov.PreferredAccountID, exclude); ok {
+			return acct
+		}
+		log.Printf("[PREFER] 优先账号 %s 当前不可用，退回 %s 策略选号",
+			prov.PreferredAccountID, prov.RouteModeOrDefault())
+	}
+
 	mode := prov.RouteModeOrDefault()
 	// 会话绑定：先看有没有现成的绑定，且该账号仍可用
 	if mode == config.RouteSticky && sessionKey != "" {
@@ -905,4 +920,21 @@ func (p *Pool) cooldownOnErrorOn() bool {
 	p.policyMu.RLock()
 	defer p.policyMu.RUnlock()
 	return p.cooldownOnError
+}
+
+// CreditsOf 返回账号当前的余额快照，供面板展示。
+func (p *Pool) CreditsOf(pid, aid string) (float64, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st := p.state[key(pid, aid)]
+	if st == nil || st.creditsAt.IsZero() {
+		return 0, false
+	}
+	return st.remaining, true
+}
+
+// ResetSessions 清空会话绑定表。
+// 选号规则改动后调用，避免旧绑定把请求继续钉在原来的账号上。
+func (p *Pool) ResetSessions() {
+	p.sessions.Reset()
 }

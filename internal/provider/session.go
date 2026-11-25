@@ -206,3 +206,13 @@ func (t *sessionTable) loadOf(accountID string) int {
 	}
 	return n
 }
+
+// Reset 清空全部绑定。
+func (t *sessionTable) Reset() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.items = map[string]*sessionBinding{}
+	t.mu.Unlock()
+}

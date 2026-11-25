@@ -737,6 +737,42 @@
   </div>
 
   <div class="card">
+    <h2>选号规则</h2>
+    <details class="fold">
+      <summary>
+        <span class="fold-title">用哪个账号</span>
+        <span class="fold-badge" id="routeBadge">—</span>
+        <span class="fold-hint">点开选择</span>
+      </summary>
+      <div class="fold-body">
+        <div class="dim" style="font-size:12px;margin-bottom:10px">
+          选号直接决定积分消耗：<b>换号会让上游前缀缓存失效</b>，
+          整段输入从约 10% 计价变全价（实测同一会话 54.9 万 token 差 10 倍）。
+        </div>
+        <div class="field">
+          <label>优先账号（指定后只要可用就一直用它，缓存最稳）</label>
+          <select id="fPreferred"></select>
+        </div>
+        <div class="field">
+          <label>兜底策略（优先账号不可用时按这个选）</label>
+          <select id="fRouteMode">
+            <option value="sticky">会话绑定（推荐）</option>
+            <option value="expiry">到期优先</option>
+            <option value="balance">用量均衡</option>
+            <option value="rotate">轮询（缓存最差）</option>
+          </select>
+        </div>
+        <div id="routeRules" style="margin-top:10px"></div>
+        <div class="btnrow" style="margin-top:12px">
+          <button class="btn primary" id="btnRouteSave">保存</button>
+          <button class="btn" id="btnRouteRefresh">刷新</button>
+          <span class="dim" id="routeState" style="font-size:12px"></span>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
     <h2>版本与更新</h2>
     <div class="kv"><span>当前版本</span><code id="verCurrent">-</code></div>
     <div id="verUpdate" style="margin-top:8px"></div>
@@ -1096,7 +1132,7 @@ const LOADERS = {
     await loadReserveSetting();
   },
   logs: loadLogs,
-  settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); await checkUpdate(); await loadSwitchPolicy(); },
+  settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); await checkUpdate(); await loadSwitchPolicy(); await loadRoutingRules(); },
 };
 
 function switchTab(name) {
@@ -2730,6 +2766,82 @@ function msClass(v) {
   return 'ok';
 }
 
+
+
+// 选号规则
+let _routeData = null;
+
+async function loadRoutingRules() {
+  try {
+    const d = await api('/api/routing-rules?provider=workbuddy');
+    _routeData = d;
+
+    // 账号下拉
+    const sel = el('fPreferred');
+    const accs = d.accounts || [];
+    sel.innerHTML = '<option value="">不指定（按下面的策略选）</option>' + accs.map(a => {
+      const cred = a.hasCredits ? ' · ' + Math.round(a.credits) + '分' : '';
+      const st = a.state ? ' · ' + a.state : '';
+      return '<option value="' + esc(a.id) + '">' + esc(a.name || a.id) + cred + st + '</option>';
+    }).join('');
+    sel.value = d.preferred || '';
+    el('fRouteMode').value = d.routeMode || 'sticky';
+
+    // 徽标
+    const badge = el('routeBadge');
+    if (badge) {
+      if (d.preferred) {
+        const p = accs.find(a => a.id === d.preferred);
+        badge.textContent = '优先 ' + (p ? (p.name || p.id) : d.preferred);
+        badge.style.color = '#22c55e';
+      } else {
+        badge.textContent = '策略 ' + (d.routeMode || 'sticky');
+        badge.style.color = 'var(--dim)';
+      }
+    }
+
+    // 规则说明
+    const color = r => r === 'high' ? '#ef4444' : r === 'mid' ? '#f59e0b' : '#22c55e';
+    el('routeRules').innerHTML = (d.rules || []).map(r =>
+      '<div style="padding:8px 0;border-bottom:1px solid var(--line)">'
+      + '<div style="display:flex;gap:8px;align-items:center">'
+      +   '<span style="flex:1;font-weight:600">' + esc(r.name) + '</span>'
+      +   '<span style="font-size:11px;color:' + color(r.risk) + '">'
+      +   (r.risk === 'high' ? '影响大' : r.risk === 'mid' ? '需权衡' : '安全') + '</span>'
+      + '</div>'
+      + '<div class="dim" style="font-size:12px;margin-top:2px">' + esc(r.desc) + '</div>'
+      + '<div style="font-size:12px;margin-top:2px"><span style="color:#22c55e">＋</span> ' + esc(r.pros) + '</div>'
+      + '<div style="font-size:12px;margin-top:2px"><span style="color:#ef4444">－</span> ' + esc(r.cons) + '</div>'
+      + '</div>'
+    ).join('');
+  } catch (e) {
+    el('routeRules').innerHTML = '<span class="err">加载失败：' + esc(e.message) + '</span>';
+  }
+}
+
+async function saveRoutingRules() {
+  const body = {
+    provider: 'workbuddy',
+    routeMode: el('fRouteMode').value,
+    preferred: el('fPreferred').value,
+    setPreferred: true,
+  };
+  const btn = el('btnRouteSave');
+  btn.disabled = true;
+  try {
+    await api('/api/routing-rules', { method: 'POST', body });
+    toast('已保存并生效', 'ok');
+    el('routeState').innerHTML = '<span style="color:#22c55e">● 已生效</span>';
+    await loadRoutingRules();
+  } catch (e) {
+    toast('保存失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+on('btnRouteSave', 'click', saveRoutingRules);
+on('btnRouteRefresh', 'click', loadRoutingRules);
 
 // 换号策略面板
 let _switchOptions = [];
