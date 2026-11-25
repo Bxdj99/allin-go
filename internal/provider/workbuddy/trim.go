@@ -2,8 +2,8 @@ package workbuddy
 
 import (
 	"encoding/json"
-	"sort"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -59,10 +59,15 @@ const (
 
 // TrimResult 是裁剪结果。
 type TrimResult struct {
-	Body     []byte
-	Dropped  int  // 丢掉的消息条数
+	Body      []byte
+	Dropped   int // 丢掉的消息条数
 	Estimated int // 裁剪后的估算 token
-	Trimmed  bool
+	Trimmed   bool
+
+	// Before 是裁剪前的估算 token，Before-BP 就是这次裁剪省下的量。
+	// 之所以要记它：用户问「积分为什么这么高」时，
+	// 「裁剪到底省了多少」是必须能回答的问题 —— 之前完全看不到。
+	Before int
 }
 
 // TrimContext 检查并裁剪请求体里的 messages，使其不超过上游上下文上限。
@@ -108,7 +113,7 @@ func TrimContextTo(body []byte, budget int) (*TrimResult, error) {
 	}
 	est := msgTokens + toolsChars/toolsCharsPerToken
 	if est <= limit {
-		return &TrimResult{Body: body, Estimated: est}, nil
+		return &TrimResult{Body: body, Estimated: est, Before: est}, nil
 	}
 
 	// 需要裁剪：先分离 system 与其余
@@ -301,7 +306,6 @@ func TrimContextTo(body []byte, budget int) (*TrimResult, error) {
 		break
 	}
 
-
 	out := append(append([]json.RawMessage{}, systems...), kept...)
 	buf, err := json.Marshal(out)
 	if err != nil {
@@ -324,6 +328,7 @@ func TrimContextTo(body []byte, budget int) (*TrimResult, error) {
 		Body:      nb,
 		Dropped:   len(rest) - len(kept),
 		Estimated: est2,
+		Before:    est,
 		Trimmed:   true,
 	}, nil
 }

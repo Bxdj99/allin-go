@@ -95,6 +95,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/accounts/probe", s.withAuth(s.handleAccountsProbe))
 	s.mux.HandleFunc("/api/accounts/usage", s.withAuth(s.handleAccountUsage))
 	s.mux.HandleFunc("/api/accounts/usage/reset", s.withAuth(s.handleAccountUsageReset))
+	// 请求质量：错误分类、裁剪省了多少、平均重试次数。
+	s.mux.HandleFunc("/api/quality", s.withAuth(s.handleQuality))
 	s.mux.HandleFunc("/api/accounts/export", s.withAuth(s.handleAccountsExport))
 	s.mux.HandleFunc("/api/accounts/import", s.withAuth(s.handleAccountsImport))
 	s.mux.HandleFunc("/api/effort", s.withAuth(s.handleEffort))
@@ -248,6 +250,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		return
 	}
 	s.requests.Add(1)
+	quality.RecordRequest()
 	// 首字延迟归因用：从收到请求开始计时，各阶段累加进 ttft。
 	// 只用于日志，不参与任何逻辑判断。
 	tReq := time.Now()
@@ -420,7 +423,11 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		preTrimBody = upstreamBody
 		if tr, terr := workbuddy.TrimContext(upstreamBody); terr == nil {
 			if tr.Trimmed {
-				log.Printf("上下文裁剪：丢弃 %d 条历史，估算 %d tokens", tr.Dropped, tr.Estimated)
+				log.Printf("上下文裁剪：丢弃 %d 条历史，%d → %d tokens",
+					tr.Dropped, tr.Before, tr.Estimated)
+				// 记账：用户问「积分为什么这么高」时，
+				// 「裁剪到底省了多少」是必须能回答的问题。
+				quality.RecordTrim(tr.Before, tr.Estimated)
 			}
 			upstreamBody = tr.Body
 		}
@@ -597,6 +604,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 			upreq = upreq.WithContext(r.Context())
 
 			tTry := time.Now()
+			quality.RecordAttempt()
 			resp, err := provider.HTTPClient.Do(upreq)
 			if err != nil {
 				uc.fail(sp.ID, step.Model)
@@ -633,6 +641,13 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				// 不在这里拦住的话会白跑满 3 次换号 + 整条降级链，用户干等十几秒
 				// 却只看到一句「本机出错」。
 				sniff, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+				// 分类记账：把「额度耗尽」「限流」从真错误里摘出来，
+				// 否则看一个 Errors 总数完全判断不出严重程度。
+				quality.RecordError(classifyUpstreamError(
+					resp.StatusCode, string(sniff),
+					resp.StatusCode == 401 || resp.StatusCode == 403,
+					resp.StatusCode == 429,
+					fallback.IsContextTooLarge(string(sniff))))
 				// 4xx 的响应体一定要留证：上游常说「参数无效」但不告诉你是哪个参数，
 				// 没有原文根本没法排查。
 				if resp.StatusCode >= 400 {
@@ -724,8 +739,9 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 						continue
 					}
 					stepBody = tr.Body
-					log.Printf("上游嫌请求过大，第 %d 轮重裁：预算 %d tokens，建议 %d tokens",
-						trimRounds, trimBudget, tr.Estimated)
+					log.Printf("上游嫌请求过大，第 %d 轮重裁：预算 %d tokens，%d → %d tokens",
+						trimRounds, trimBudget, tr.Before, tr.Estimated)
+					quality.RecordTrim(tr.Before, tr.Estimated)
 					// 用同一账号、同一个 attempt 重发，不消耗换号次数
 					attempt--
 					continue
