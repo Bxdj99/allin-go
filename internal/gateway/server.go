@@ -97,6 +97,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/accounts/usage/reset", s.withAuth(s.handleAccountUsageReset))
 	// 请求质量：错误分类、裁剪省了多少、平均重试次数。
 	s.mux.HandleFunc("/api/quality", s.withAuth(s.handleQuality))
+	// 工具使用统计：哪些工具是纯成本。
+	s.mux.HandleFunc("/api/tools/usage", s.withAuth(s.handleToolUsage))
 	s.mux.HandleFunc("/api/accounts/export", s.withAuth(s.handleAccountsExport))
 	s.mux.HandleFunc("/api/accounts/import", s.withAuth(s.handleAccountsImport))
 	s.mux.HandleFunc("/api/effort", s.withAuth(s.handleEffort))
@@ -251,6 +253,9 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	}
 	s.requests.Add(1)
 	quality.RecordRequest()
+	// 工具使用统计：只扫请求体，不改内容。
+	// 放在这里是唯一能同时看到「声明了什么」和「历史里用了什么」的地方。
+	toolUsageRequests.Add(1)
 	// 首字延迟归因用：从收到请求开始计时，各阶段累加进 ttft。
 	// 只用于日志，不参与任何逻辑判断。
 	tReq := time.Now()
@@ -282,6 +287,9 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		s.fail(w, http.StatusBadRequest, "请求体不是合法 JSON: "+err.Error())
 		return
 	}
+	// 工具使用统计：扫一遍请求体的 tools 与历史 tool_calls。
+	// 只读，不改 body —— 任何改写都会打乱缓存前缀。
+	recordToolTraffic(body)
 
 	cfg := s.store.Snapshot()
 	// 请求级记账上下文：一条客户端请求可能换号、换模型甚至换供应商，
