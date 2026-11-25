@@ -280,6 +280,13 @@ type usageCtx struct {
 	accountID string
 	// creditStats 表示是否记账号级积分统计（面板可关）。
 	creditStats bool
+
+	// onLoad 把本次真实 token 消耗喂给选号调度器。
+	// 为 nil 表示不参与（例如单测或非账号池路径）。
+	//
+	// 为什么放在记账点：这里是唯一拿到「本次到底花了多少 token」的地方。
+	// 选号调度器按它打分，才能把重活摊开 —— 只按请求次数轮转是轻重大小不分的。
+	onLoad func(tokens float64)
 }
 
 // newUsageCtx 为一条客户端请求建记账上下文。
@@ -323,6 +330,15 @@ func (c *usageCtx) record(usageProvider, usageModel string, ok bool, u usageToke
 	recordUsageStat(usageProvider, usageModel, ok, u.counts())
 	if c.creditStats && c.accountID != "" {
 		recordAccountUsage(usageProvider, c.accountID, ok, u)
+	}
+	// 把真实 token 数喂给选号调度器。
+	// 失败也要报（传 0），否则在途名额不释放，那个号会被永久低估。
+	if c.onLoad != nil {
+		if ok {
+			c.onLoad(float64(u.In + u.Out))
+		} else {
+			c.onLoad(0)
+		}
 	}
 }
 

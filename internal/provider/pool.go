@@ -44,9 +44,21 @@ type acctState struct {
 // 否则会选出只剩零点几分的号，请求立刻因额度不足失败、白跑一次换号重试。
 const CreditsFloor = 1.0
 
-// creditsStale 是积分快照的保鲜期。超过这个时间的快照不参与排序，
-// 避免用几小时前的旧数据误导选号。
-const creditsStale = 30 * time.Minute
+// creditsStale 是积分快照的保鲜期。
+//
+// v1.39.0 从 30 分钟收紧到 2 分钟（对齐上游 AccountRoutingPolicy 的 FRESH_MS=120s）。
+// 原因：半小时前的余额等于过期地图 —— 期间某个号可能已经耗尽，
+// 却仍被当成「余额充足」选中，白打一次上游并触发 429。
+// 线上 451 次 429 全部是额度耗尽，与慢刷新直接相关。
+//
+// 注意：光改这里没用，creditsRefreshInterval 必须同步调快，
+// 否则快照永远「过期」，保底与选号会一起退化成未知状态。
+const creditsStale = 2 * time.Minute
+
+// loadTie 是「负载视为持平」的阈值。
+// 上游用 0.5 个百分点的余额比例作为分档，这里对 token 负载取一个绝对值：
+// 一次普通对话也就几千 token，小于这个数量级的差异不值得改变选号结果。
+const loadTie = 2000.0
 
 // Pool 管理所有供应商的账号选择与健康状态。
 //
@@ -68,6 +80,10 @@ type Pool struct {
 	// reserveStrict 为真时，全部账号低于保底值就不派活（返回 nil）。
 	// 为假时退化为「挑余额最高的那个用」，避免用户看到「全部不可用」。
 	reserveStrict bool
+
+	// load 按「近期真实 token 消耗」给账号打分，用于把重活摊开。
+	// 见 scheduler.go 的说明：只按请求次数轮转会轻重大小不分。
+	load *UsageScheduler
 }
 
 // SetCreditReserve 设置「切号保底」：开启后余额低于 amount 的账号不再派活。
@@ -157,7 +173,11 @@ func (p *Pool) creditFloor() float64 {
 
 // NewPool 构造账号池。
 func NewPool() *Pool {
-	return &Pool{state: make(map[string]*acctState), sessions: newSessionTable()}
+	return &Pool{
+		state:    make(map[string]*acctState),
+		sessions: newSessionTable(),
+		load:     NewUsageScheduler(),
+	}
 }
 
 func key(pid, aid string) string { return pid + "/" + aid }
@@ -366,6 +386,21 @@ func (p *Pool) pickRanked(prov *config.Provider, exclude map[string]bool, mode s
 					return ar.Before(br)
 				}
 			}
+		}
+
+		// 按「近期真实 token 负载」分高低，这是把重活摊开的关键一步。
+		//
+		// 只按成功次数轮转的问题是轻重大小不分：
+		// 线上两个账号，202 次请求吃掉 7443 万输入 token，
+		// 1028 次请求吃掉 2.39 亿 —— 次数差 5 倍，消耗却接近。
+		// 按 token 加权后，刚跑过重活的号会靠后，请求自然流向更轻的号。
+		//
+		// 负载差在 LOAD_TIE 以内视为持平，继续走下面的轮转，
+		// 免得几 token 的微小差异就完全压过其它策略。
+		la := p.load.Load(key(prov.ID, a.ID))
+		lb := p.load.Load(key(prov.ID, b.ID))
+		if diff := la - lb; diff > loadTie || diff < -loadTie {
+			return la < lb
 		}
 
 		// 轮转兜底：成功次数少的先上
@@ -590,9 +625,13 @@ func (p *Pool) fail(pid, aid string, status int, reason, errBody string) {
 	if mult > 8 {
 		mult = 8
 	}
-	// 凭据失效不会自愈：401/403 连续 3 次就按「长期失效」处理，
-	// 冷却 7 天。否则每轮刷新只是把 30 分钟重新点一次，
-	// 界面上永远显示「冷却中」却永远恢复不了，用户也看不出是死号。
+	// 凭据失效不会自愈：401/403 连续 3 次就按「长期失效」处理，冷却 7 天。
+	//
+	// 为什么不是首次就判死：单个 401 也可能来自瞬时故障，
+	// 一次就冻 7 天代价太大。连续 3 次才是足够可靠的信号。
+	//
+	// 积分刷新那条路径另有一套更快的判定（见 gateway.credits_refresh）：
+	// 它 90 秒一轮，等 3 次会白刷 6 分钟，所以在那里用 MarkNeedRelogin 直接打标。
 	if (status == 401 || status == 403) && st.failures >= 3 {
 		st.coolUntil = time.Now().Add(coolDeadCredential)
 		st.needRelogin = true
@@ -744,4 +783,41 @@ func (p *Pool) LastRemaining(pid, aid string) (float64, bool) {
 		return 0, false
 	}
 	return st.remaining, true
+}
+
+// NeedsRelogin 判断账号是否已被标记为「需要重新登录」。
+//
+// 用途：积分刷新这类周期性任务据此跳过死号，
+// 避免每轮都对着一个不可能成功的账号打一次请求（线上曾累积 882 条 401）。
+// 用户重新登录后由 MarkNeedRelogin(false) 或 Success() 清除。
+func (p *Pool) NeedsRelogin(pid, aid string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st := p.state[key(pid, aid)]
+	return st != nil && st.needRelogin
+}
+
+// ReserveLoad 为某个账号占一个在途名额，返回释放函数。
+//
+// 用途：请求真正发出前后各调用一次，让调度器知道「这个号正在跑」。
+// 不占用的话，并发首请求会全压到同一个「此刻最轻」的号上。
+//
+// 释放函数幂等，且必须调用 —— 否则名额泄漏，该号会被永久低估价值。
+func (p *Pool) ReserveLoad(pid, aid string) func(tokens float64) {
+	ref := key(pid, aid)
+	_, release, ok := p.load.PickAndReserve([]string{ref})
+	if !ok {
+		return func(float64) {}
+	}
+	return release
+}
+
+// ChargeLoad 直接给账号记一次消耗（没有走 ReserveLoad 的场景）。
+func (p *Pool) ChargeLoad(pid, aid string, tokens float64) {
+	p.load.Charge(key(pid, aid), tokens)
+}
+
+// LoadOf 返回账号当前负载，供诊断与面板展示。
+func (p *Pool) LoadOf(pid, aid string) float64 {
+	return p.load.Load(key(pid, aid))
 }

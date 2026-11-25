@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -536,6 +537,13 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		// 会话绑定：同一段对话钉在同一账号，避免每轮换号触发上游限流
 		sessKey := provider.SessionKey(sp.ID, sessionFingerprint(body))
 		modelExhausted := false
+		// prevRelease 记录上一个尝试占用的在途名额，换号时归还。
+		var prevRelease func(float64)
+		defer func() {
+			if prevRelease != nil {
+				prevRelease(0)
+			}
+		}()
 		for attempt := 0; attempt < maxAccountAttempts; attempt++ {
 			acct := s.pool.PickForSession(sp, tried, sessKey)
 			if acct == nil {
@@ -553,6 +561,23 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 			}
 			tried[acct.ID] = true
 			uc.accountID = acct.ID // 按账号记积分消耗
+
+			// 占一个在途名额，并让记账回调把真实 token 数交回调度器。
+			// 两者必须成对：release 在本次请求记账时调用一次，**
+			// 无论成功失败都要释放**，否则名额泄漏会让这个号被永久低估。
+			provID := sp.ID
+			acctID := acct.ID
+			releaseLoad := s.pool.ReserveLoad(provID, acctID)
+			var loadOnce sync.Once
+			// 换号前若上一个 lease 还没释放，先按 0 释放掉。
+			// 上一个请求已经失败，确实没产生 token，但名额必须归还。
+			if prevRelease != nil {
+				prevRelease(0)
+			}
+			uc.onLoad = func(tokens float64) {
+				loadOnce.Do(func() { releaseLoad(tokens) })
+			}
+			prevRelease = func(float64) { loadOnce.Do(func() { releaseLoad(0) }) }
 
 			// 注入 prompt_cache_key —— 省积分的关键一步。
 			// 实测不带它时上游无法复用前缀缓存，credit 约是带它的 17 倍。
