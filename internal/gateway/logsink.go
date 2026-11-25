@@ -62,3 +62,17 @@ func SetLogEnabled(on bool) { globalLog.set(on) }
 
 // LogEnabled 当前是否开启。
 func LogEnabled() bool { return globalLog.isOn() }
+
+// statsEnabled 判断是否采集统计数据。
+//
+// 语义：与「日志总开关」完全一致 —— 关掉开关就彻底停采集，
+// 不区分「日志输出」和「统计累计」。
+// 用户明确要求二者统一，所以这里直接复用同一个配置项。
+//
+// 注意：关掉后已有数据仍在，只是不再增长；重新打开会接着累加。
+func (s *Server) statsEnabled() bool {
+	if s == nil || s.store == nil {
+		return true
+	}
+	return s.store.Snapshot().Server.LogCaptureEnabled()
+}

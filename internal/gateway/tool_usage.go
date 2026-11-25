@@ -45,6 +45,7 @@ func toolStat(name string) *toolUsageStat {
 		st = &toolUsageStat{}
 		toolUsageTable[name] = st
 	}
+	markQualityDirty()
 	return st
 }
 

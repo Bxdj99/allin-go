@@ -151,6 +151,14 @@ func (s *Server) Start(ctx context.Context) {
 	// 账号用量：启动时从磁盘恢复，之后定期落盘
 	s.loadAccountUsage()
 	s.startAccountUsageSaver(ctx)
+	// 质量/工具统计：同样落盘，避免重启归零（用户要求能长期统计）
+	s.initQualityPersist()
+	done := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		close(done)
+	}()
+	s.startQualitySaver(done)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -254,10 +262,14 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		return
 	}
 	s.requests.Add(1)
-	quality.RecordRequest()
-	// 工具使用统计：只扫请求体，不改内容。
-	// 放在这里是唯一能同时看到「声明了什么」和「历史里用了什么」的地方。
-	toolUsageRequests.Add(1)
+	// 统计受「日志总开关」控制：关掉后就完全不再采集。
+	// 用户要求「总日志开关一关，所有日志都关掉」——
+	// 这里把统计也一并纳入，避免关了开关还在后台偷偷累积。
+	statsOn := s.statsEnabled()
+	if statsOn {
+		quality.RecordRequest()
+		toolUsageRequests.Add(1)
+	}
 	// 首字延迟归因用：从收到请求开始计时，各阶段累加进 ttft。
 	// 只用于日志，不参与任何逻辑判断。
 	tReq := time.Now()
@@ -291,7 +303,9 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	}
 	// 工具使用统计：扫一遍请求体的 tools 与历史 tool_calls。
 	// 只读，不改 body —— 任何改写都会打乱缓存前缀。
-	recordToolTraffic(body)
+	if statsOn {
+		recordToolTraffic(body)
+	}
 
 	cfg := s.store.Snapshot()
 	// 请求级记账上下文：一条客户端请求可能换号、换模型甚至换供应商，
@@ -640,7 +654,9 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 			upreq = upreq.WithContext(r.Context())
 
 			tTry := time.Now()
-			quality.RecordAttempt()
+			if s.statsEnabled() {
+				quality.RecordAttempt()
+			}
 			resp, err := provider.HTTPClient.Do(upreq)
 			if err != nil {
 				uc.fail(sp.ID, step.Model)

@@ -75,6 +75,7 @@ func (q *QualityStats) RecordError(kind string) {
 		kind = errOther
 	}
 	q.errCounter(kind).Add(1)
+	markQualityDirty()
 }
 
 // RecordTrim 记一次裁剪。
@@ -86,6 +87,7 @@ func (q *QualityStats) RecordTrim(before, after int) {
 		after = 0
 	}
 	q.TrimHits.Add(1)
+	markQualityDirty()
 	q.TrimBefore.Add(int64(before))
 	if saved := before - after; saved > 0 {
 		q.TrimSaved.Add(int64(saved))
@@ -93,10 +95,16 @@ func (q *QualityStats) RecordTrim(before, after int) {
 }
 
 // RecordAttempt 记一次上游尝试。
-func (q *QualityStats) RecordAttempt() { q.Attempts.Add(1) }
+func (q *QualityStats) RecordAttempt() {
+	q.Attempts.Add(1)
+	markQualityDirty()
+}
 
 // RecordRequest 记一次客户端请求。
-func (q *QualityStats) RecordRequest() { q.Requests.Add(1) }
+func (q *QualityStats) RecordRequest() {
+	q.Requests.Add(1)
+	markQualityDirty()
+}
 
 // QualitySnapshot 是导出给面板的一份快照。
 type QualitySnapshot struct {
