@@ -698,6 +698,16 @@
       <label>输出 token 上限（0 = 不限制；只在客户端传得更大时下调）</label>
       <input id="fMaxOutput" type="number" min="0" max="2000000" value="0" style="width:160px">
     </div>
+
+    <div class="hint" style="margin:12px 0">
+      <b>上下文裁剪预算：</b>单次请求超过这个 token 数就砍掉较早的历史。<br>
+      <b>0 = 默认 95 万</b>（上游硬上限留余量，只在触顶时才裁）。<br>
+      嫌积分花得快可以调低——代价是<b>模型会忘事</b>，砍掉的是真实历史。
+    </div>
+    <div class="field">
+      <label>裁剪预算（token，0 = 默认 95 万）</label>
+      <input id="fTrimBudget" type="number" min="0" max="2000000" value="0" style="width:160px">
+    </div>
     <div class="btnrow">
       <button class="btn primary" id="btnCompressToggle">开启压缩</button>
       <button class="btn" id="btnCompressSave">保存设置</button>
@@ -2731,6 +2741,7 @@ async function loadCompress() {
     const d = await api('/api/compress');
     _compressEnabled = !!d.enabled;
     el('fKeepRecent').value = d.keepRecent != null ? d.keepRecent : 6;
+    el('fTrimBudget').value = d.trimBudget != null ? d.trimBudget : 0;
     el('fMaxOutput').value = d.maxOutput != null ? d.maxOutput : 0;
     renderCompressToggle();
   } catch (e) {
@@ -2775,10 +2786,13 @@ on('btnCompressSave', 'click', async (e) => {
   if (mo < 0 || mo > 2000000) { toast('输出上限需在 0-2000000 之间', 'err'); return; }
   btn.disabled = true;
   try {
-    const r = await api('/api/compress/set', { method: 'POST', body: { keepRecent: n, maxOutput: mo } });
+    const tb = parseInt(el('fTrimBudget').value, 10) || 0;
+    if (tb < 0 || tb > 2000000) { toast('裁剪预算需在 0-2000000 之间', 'err'); return; }
+    const r = await api('/api/compress/set', { method: 'POST', body: { keepRecent: n, maxOutput: mo, trimBudget: tb } });
     _compressEnabled = !!r.enabled;
     renderCompressToggle();
-    toast('已保存：保留 ' + r.keepRecent + ' 组，输出上限 ' + (r.maxOutput || '不限'), 'ok');
+    toast('已保存：保留 ' + r.keepRecent + ' 组，输出上限 ' + (r.maxOutput || '不限')
+      + '，裁剪预算 ' + (r.trimBudget ? r.trimBudget + ' tokens' : '默认 95 万'), 'ok');
   } catch (err) {
     toast('保存失败：' + err.message, 'err');
   } finally {

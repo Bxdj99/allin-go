@@ -43,6 +43,20 @@ type Server struct {
 	HistoryCompress *bool `json:"historyCompress,omitempty"`
 	// CompressKeepRecent 是压缩时保留最近的工具调用组数，默认 6。
 	CompressKeepRecent *int `json:"compressKeepRecent,omitempty"`
+
+	// TrimBudget 是上下文裁剪的 token 预算，0 表示用默认阈值（95 万）。
+	//
+	// 为什么需要可调：默认 95 万是「上游硬上限留 10% 余量」，只在触顶时才裁。
+	// 但线上常见的是「单次 20 万 token、一天几千次」，总量早就爆了却永远
+	// 触发不到裁剪 —— 那时真正该降的是单次成本，而不是等触顶。
+	//
+	// 调低它的代价很实在：模型会「忘事」，因为被砍掉的是真实历史。
+	// 所以这里只提供旋钮，默认值不动。
+	TrimBudget *int `json:"trimBudget,omitempty"`
+
+	// TrimEnabled 是上下文裁剪开关，默认开启。
+	// 关掉后完全不做 token 裁剪（上游嫌大时仍会兜底重裁，否则请求必失败）。
+	TrimEnabled *bool `json:"trimEnabled,omitempty"`
 	// CreditReserve 是「切号保底」开关。默认关闭。
 	//
 	// 开启后，剩余积分低于 CreditReserveAmount 的账号不再被派活，
@@ -617,4 +631,17 @@ func mask(v string) string {
 		return "***"
 	}
 	return v[:6] + "..." + v[len(v)-4:]
+}
+
+// TrimBudgetValue 返回裁剪预算；0 或未配置表示用默认阈值。
+func (s *Server) TrimBudgetValue() int {
+	if s.TrimBudget == nil || *s.TrimBudget <= 0 {
+		return 0
+	}
+	return *s.TrimBudget
+}
+
+// TrimEnabledOn 返回裁剪开关状态，默认开启。
+func (s *Server) TrimEnabledOn() bool {
+	return s.TrimEnabled == nil || *s.TrimEnabled
 }

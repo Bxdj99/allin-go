@@ -23,7 +23,9 @@ func (s *Server) handleCompressGet(w http.ResponseWriter, r *http.Request) {
 		"creditReserve": cfg.Server.CreditReserveEnabled(),
 		"reserveAmount": cfg.Server.CreditReserveValue(),
 		"reserveStrict": cfg.Server.CreditReserveStrictEnabled(),
-		"note":          "开启会把较早的工具调用摘要掉，减小请求体；但会改变 prompt 前缀，可能降低缓存命中率",
+		"trimEnabled":   cfg.Server.TrimEnabledOn(),
+		"trimBudget":    cfg.Server.TrimBudgetValue(),
+		"note":          "enabled=历史压缩（改前缀，可能降缓存命中）；trimBudget=上下文裁剪预算 token，0=默认95万，调低能省积分但模型会忘事",
 	})
 }
 
@@ -41,6 +43,8 @@ func (s *Server) handleCompressSet(w http.ResponseWriter, r *http.Request) {
 		CreditReserve *bool    `json:"creditReserve"`
 		ReserveAmount *float64 `json:"reserveAmount"`
 		ReserveStrict *bool    `json:"reserveStrict"`
+		TrimEnabled   *bool    `json:"trimEnabled"`
+		TrimBudget    *int     `json:"trimBudget"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "JSON 解析失败: " + err.Error()})
@@ -50,9 +54,13 @@ func (s *Server) handleCompressSet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "reserveAmount 需在 0-1000000 之间"})
 		return
 	}
+	if in.TrimBudget != nil && (*in.TrimBudget < 0 || *in.TrimBudget > 2_000_000) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "trimBudget 需在 0-2000000 之间（0=默认）"})
+		return
+	}
 	if in.Enabled == nil && in.KeepRecent == nil && in.MaxOutput == nil &&
 		in.CreditStats == nil && in.CreditReserve == nil && in.ReserveAmount == nil &&
-		in.ReserveStrict == nil {
+		in.ReserveStrict == nil && in.TrimEnabled == nil && in.TrimBudget == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "没有要修改的字段"})
 		return
 	}
@@ -94,6 +102,14 @@ func (s *Server) handleCompressSet(w http.ResponseWriter, r *http.Request) {
 		v := *in.ReserveStrict
 		cfg.Server.CreditReserveStrict = &v
 	}
+	if in.TrimEnabled != nil {
+		v := *in.TrimEnabled
+		cfg.Server.TrimEnabled = &v
+	}
+	if in.TrimBudget != nil {
+		v := *in.TrimBudget
+		cfg.Server.TrimBudget = &v
+	}
 	if err := s.store.Save(cfg); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "保存失败: " + err.Error()})
 		return
@@ -109,6 +125,8 @@ func (s *Server) handleCompressSet(w http.ResponseWriter, r *http.Request) {
 		"creditReserve": cfg.Server.CreditReserveEnabled(),
 		"reserveAmount": cfg.Server.CreditReserveValue(),
 		"reserveStrict": cfg.Server.CreditReserveStrictEnabled(),
+		"trimEnabled":   cfg.Server.TrimEnabledOn(),
+		"trimBudget":    cfg.Server.TrimBudgetValue(),
 	})
 }
 

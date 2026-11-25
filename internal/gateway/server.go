@@ -411,9 +411,19 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				MinGroupChars:    2000,
 			}
 			if compressed, n := workbuddy.CompressHistoryWith(upstreamBody, opts); n > 0 {
-				log.Printf("历史压缩：%d 组工具调用已摘要（%d → %d 字节）",
-					n, len(upstreamBody), len(compressed))
-				upstreamBody = compressed
+				beforeTok := EstimateBodyTokens(upstreamBody)
+				afterTok := EstimateBodyTokens(compressed)
+				// 压缩会改写中段内容 → 前缀失效 → 原本能命中的缓存全部按全价。
+				// 只有省得足够多才值得，否则宁可不压。
+				if ok, why := cachePrefixRewriteWorthwhile(beforeTok, afterTok, true); ok {
+					log.Printf("历史压缩：%d 组工具调用已摘要（%d → %d tokens，%s）",
+						n, beforeTok, afterTok, why)
+					logCachePrefixRisk("历史压缩", beforeTok, afterTok, why)
+					upstreamBody = compressed
+				} else {
+					log.Printf("历史压缩：跳过（%d → %d tokens，%s）",
+						beforeTok, afterTok, why)
+				}
 			}
 		}
 
@@ -421,10 +431,22 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 		// 若上游仍嫌大（见下面的续写逻辑），会用更小预算重裁。
 		// 保留裁剪前快照，续写时从它出发，避免在已裁过的产物上二次裁导致越裁越碎。
 		preTrimBody = upstreamBody
-		if tr, terr := workbuddy.TrimContext(upstreamBody); terr == nil {
+		// 裁剪预算可配：0 表示用默认阈值（95 万）。
+		// 用户嫌积分花得快时，把预算调低能立刻降低单次成本，
+		// 代价是被砍掉的历史模型就看不见了。
+		trimBudget := cfg.Server.TrimBudgetValue()
+		var tr *workbuddy.TrimResult
+		var terr error
+		if cfg.Server.TrimEnabledOn() {
+			tr, terr = workbuddy.TrimContextTo(upstreamBody, trimBudget)
+		}
+		if tr != nil && terr == nil {
 			if tr.Trimmed {
 				log.Printf("上下文裁剪：丢弃 %d 条历史，%d → %d tokens",
 					tr.Dropped, tr.Before, tr.Estimated)
+				// 裁掉中段历史同样会打乱前缀。裁剪是「必须做」的（不裁请求会失败），
+				// 所以这里不阻止，只提示代价。
+				logCachePrefixRisk("上下文裁剪", tr.Before, tr.Estimated, "超出预算，必须裁")
 				// 记账：用户问「积分为什么这么高」时，
 				// 「裁剪到底省了多少」是必须能回答的问题。
 				quality.RecordTrim(tr.Before, tr.Estimated)
