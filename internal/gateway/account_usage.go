@@ -27,6 +27,13 @@ type accountUsage struct {
 	// 显示时除以 1000。
 	CreditMilli atomic.Int64
 	LastAt      atomic.Int64 // unix 秒
+
+	// 缓存统计。CacheKnown 记录「有多少次请求上游报过缓存字段」，
+	// 作为命中率的分母覆盖率 —— 全都没报时命中率显示「—」而不是 0%。
+	CacheRead   atomic.Int64
+	CacheWrite  atomic.Int64
+	CacheKnown  atomic.Int64
+	PromptTotal atomic.Int64 // 报过缓存字段的那些请求的输入总量
 }
 
 var (
@@ -73,6 +80,15 @@ func recordAccountUsage(providerID, accountID string, ok bool, u usageTokens) {
 		st.CreditMilli.Add(int64(u.Credit*1000 + 0.5))
 	}
 	st.LastAt.Store(time.Now().Unix())
+
+	// 缓存统计：只有上游真的报了缓存字段才计入，
+	// 保证命中率的分母只覆盖「有数据」的那部分请求。
+	if u.HasCacheInfo() {
+		st.CacheKnown.Add(1)
+		st.CacheRead.Add(u.CacheRead)
+		st.CacheWrite.Add(u.CacheWrite)
+		st.PromptTotal.Add(int64(u.In))
+	}
 	markAccUsageDirty()
 }
 
@@ -86,6 +102,12 @@ type accountUsageRow struct {
 	OutTokens  int64   `json:"outTokens"`
 	Credit     float64 `json:"credit"`
 	LastAt     int64   `json:"lastAt,omitempty"`
+
+	// 缓存命中相关。HitRate 为 nil 表示数据不足，界面应显示「—」。
+	CacheRead  int64    `json:"cacheRead,omitempty"`
+	CacheWrite int64    `json:"cacheWrite,omitempty"`
+	CacheKnown int64    `json:"cacheKnown,omitempty"`
+	HitRate    *float64 `json:"hitRate,omitempty"`
 }
 
 // accountUsageRows 导出全部账号的累计消耗，按积分从高到低排。
@@ -96,7 +118,7 @@ func accountUsageRows() []accountUsageRow {
 	rows := make([]accountUsageRow, 0, len(accUsageTable))
 	for k, st := range accUsageTable {
 		pid, aid := splitAccKey(k)
-		rows = append(rows, accountUsageRow{
+		row := accountUsageRow{
 			ProviderID: pid,
 			AccountID:  aid,
 			Requests:   st.Requests.Load(),
@@ -105,7 +127,20 @@ func accountUsageRows() []accountUsageRow {
 			OutTokens:  st.OutTokens.Load(),
 			Credit:     float64(st.CreditMilli.Load()) / 1000,
 			LastAt:     st.LastAt.Load(),
-		})
+			CacheRead:  st.CacheRead.Load(),
+			CacheWrite: st.CacheWrite.Load(),
+			CacheKnown: st.CacheKnown.Load(),
+		}
+		// 命中率只在「有请求报过缓存字段」时才给值。
+		// 用累计口径：命中的读缓存量 / 这些请求的输入总量。
+		// 没有数据时保持 nil，界面显示「—」—— 而不是骗人的 0%。
+		if st.CacheKnown.Load() > 0 {
+			if denom := st.PromptTotal.Load(); denom > 0 {
+				rate := clampRatio(float64(st.CacheRead.Load()) / float64(denom))
+				row.HitRate = &rate
+			}
+		}
+		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].Credit != rows[j].Credit {
@@ -186,4 +221,18 @@ func (s *Server) recordCreditDelta(providerID, accountID string, delta float64) 
 	}
 	st.CreditMilli.Add(int64(delta*1000 + 0.5))
 	markAccUsageDirty()
+}
+
+// clampRatio 把比例夹在 [0,1]，并把 NaN 归零。
+func clampRatio(v float64) float64 {
+	if v != v { // NaN
+		return 0
+	}
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }

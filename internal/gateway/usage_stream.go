@@ -14,6 +14,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"log"
 	"strings"
 	"time"
 )
@@ -27,6 +28,13 @@ type usageTokens struct {
 	// 用来做「哪个账号花了多少积分」的统计 —— 用户反馈积分莫名消失时，
 	// 这是唯一能自证清白的证据来源。
 	Credit float64
+
+	// 缓存用量。三个 has 标记区分「明确 0」与「上游没给」——
+	// 前者是有意义的结论（确实没命中），后者只能显示「—」。
+	CacheRead     int64
+	CacheWrite    int64
+	hasCacheRead  bool
+	hasCacheWrite bool
 }
 
 // add 把另一来源并入（同一项取较大值，兼容「部分帧只给增量」的上游）。
@@ -43,6 +51,20 @@ func (u *usageTokens) add(o usageTokens) {
 	// 积分是累计值，取最大（同一响应里可能多帧重复给）
 	if o.Credit > u.Credit {
 		u.Credit = o.Credit
+	}
+	// 缓存量同样是累计值：多帧重复给时取最大，
+	// 但只有真的给过才算「知道」（has 标记不能让 0 覆盖掉 true）。
+	if o.hasCacheRead {
+		if !u.hasCacheRead || o.CacheRead > u.CacheRead {
+			u.CacheRead = o.CacheRead
+		}
+		u.hasCacheRead = true
+	}
+	if o.hasCacheWrite {
+		if !u.hasCacheWrite || o.CacheWrite > u.CacheWrite {
+			u.CacheWrite = o.CacheWrite
+		}
+		u.hasCacheWrite = true
 	}
 }
 
@@ -62,9 +84,9 @@ func (u usageTokens) counts() usageCounts {
 func usageFromJSON(raw []byte) usageTokens {
 	var env struct {
 		Usage *struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+			PromptTokens     int     `json:"prompt_tokens"`
+			CompletionTokens int     `json:"completion_tokens"`
+			TotalTokens      int     `json:"total_tokens"`
 			InputTokens      int     `json:"input_tokens"`
 			OutputTokens     int     `json:"output_tokens"`
 			Credit           float64 `json:"credit"`
@@ -92,6 +114,7 @@ func usageFromJSON(raw []byte) usageTokens {
 	if env.Message != nil && env.Message.Usage != nil {
 		u.add(usageTokens{In: env.Message.Usage.InputTokens, Out: env.Message.Usage.OutputTokens})
 	}
+	attachCacheUsage(&u, raw)
 	return u
 }
 
@@ -106,11 +129,11 @@ func usageFromEvent(data []byte) usageTokens {
 	}
 	var env struct {
 		Usage *struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
-			InputTokens      int `json:"input_tokens"`
-			OutputTokens     int `json:"output_tokens"`
+			PromptTokens     int     `json:"prompt_tokens"`
+			CompletionTokens int     `json:"completion_tokens"`
+			TotalTokens      int     `json:"total_tokens"`
+			InputTokens      int     `json:"input_tokens"`
+			OutputTokens     int     `json:"output_tokens"`
 			CacheRead        int     `json:"cache_read_input_tokens"`
 			CacheCreation    int     `json:"cache_creation_input_tokens"`
 			Credit           float64 `json:"credit"`
@@ -143,7 +166,18 @@ func usageFromEvent(data []byte) usageTokens {
 	if env.Message != nil && env.Message.Usage != nil {
 		in := env.Message.Usage.InputTokens + env.Message.Usage.CacheRead + env.Message.Usage.CacheCreation
 		u.add(usageTokens{In: in, Out: env.Message.Usage.OutputTokens})
+		// Anthropic 形态：缓存量在上面已经加进 In 了，
+		// 这里单独记一份原始值，供命中率计算用（分母要按含缓存的口径）。
+		if env.Message.Usage.CacheRead > 0 {
+			u.CacheRead, u.hasCacheRead = int64(env.Message.Usage.CacheRead), true
+		}
+		if env.Message.Usage.CacheCreation > 0 {
+			u.CacheWrite, u.hasCacheWrite = int64(env.Message.Usage.CacheCreation), true
+		}
 	}
+	// 统一走一遍完整字段表：覆盖 prompt_tokens_details.cached_tokens、
+	// prompt_cache_hit_tokens 等 OpenAI 系别名，与上游 CacheUsage 口径一致。
+	attachCacheUsage(&u, data)
 	return u
 }
 
@@ -331,6 +365,16 @@ func (c *usageCtx) record(usageProvider, usageModel string, ok bool, u usageToke
 	if c.creditStats && c.accountID != "" {
 		recordAccountUsage(usageProvider, c.accountID, ok, u)
 	}
+	// 缓存命中写进日志：这是判断「省积分改动有没有效果」最直接的证据。
+	// 只在成功且上游报过缓存字段时打，避免刷无意义的行。
+	if ok && u.HasCacheInfo() {
+		rate, known := u.CacheHitRate()
+		if known {
+			log.Printf("[CACHE] acct=%s in=%d cached=%d write=%d hit=%.1f%%",
+				c.accountID, u.In, u.CacheRead, u.CacheWrite, rate*100)
+		}
+	}
+
 	// 把真实 token 数喂给选号调度器。
 	// 失败也要报（传 0），否则在途名额不释放，那个号会被永久低估。
 	if c.onLoad != nil {
