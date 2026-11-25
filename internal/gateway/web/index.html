@@ -651,8 +651,26 @@
   </div>
 
   <div class="card">
-    <h2>最近请求</h2>
-    <div id="logSamples" class="dim">暂无数据</div>
+    <h2>积分去向与请求质量</h2>
+    <div class="dim" style="font-size:12px;margin-bottom:10px">
+      这几项统计<b>不受上面的日志开关影响</b>，始终累计（只存内存，重启清零）。
+      关掉日志也能看，用来回答「积分到底花在哪」。
+    </div>
+    <div id="qualitySummary" class="dim">点「刷新」加载</div>
+    <div class="hint" style="margin-top:10px">
+      <b>realErrors</b> 已剔除「额度耗尽」和「窗口限流」——那两个是账号状态，不是故障。<br>
+      <b>裁剪节省</b> 是上下文裁剪省下的 token 占比；<b>平均尝试</b> 大于 1.5 说明换号频繁。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>工具使用（谁在空耗 token）</h2>
+    <div class="dim" style="font-size:12px;margin-bottom:10px">
+      工具定义每轮都发，且位于报文最前面。标 <b>[闲置]</b> 的工具「声明过但从没被调用」，
+      每轮都在为它付 token。想省就去客户端关掉对应的 MCP 或插件。
+    </div>
+    <div id="toolUsageSummary" class="dim" style="margin-bottom:8px">点「刷新」加载</div>
+    <div id="toolUsageList" style="max-height:320px;overflow:auto"></div>
   </div>
 </section>
 
@@ -2661,6 +2679,65 @@ async function loadLogs() {
     renderLogSamples((d.summary && d.summary.samples) || []);
   } catch (e) {
     el('logSummary').innerHTML = '<span class="err">加载失败：' + esc(e.message) + '</span>';
+  }
+  // 这两份统计不受日志开关影响，单独拉
+  loadQuality();
+  loadToolUsage();
+}
+
+// 请求质量：错误分类 / 裁剪收益 / 平均尝试次数
+async function loadQuality() {
+  try {
+    const r = await api('/api/quality');
+    const d = r.data || {};
+    const errs = d.errors || {};
+    const keys = Object.keys(errs).sort((a, b) => errs[b] - errs[a]);
+    const errHtml = keys.length
+      ? keys.map(k => k + ' <b>' + errs[k] + '</b>').join(' · ')
+      : '无';
+    el('qualitySummary').innerHTML =
+      '<div>请求 <b>' + (d.requests || 0) + '</b> 次，上游尝试 <b>' + (d.attempts || 0)
+      + '</b> 次，平均 <b>' + (d.avgAttempts ? d.avgAttempts.toFixed(2) : '0') + '</b> 次/请求</div>'
+      + '<div style="margin-top:6px">真错误 <b style="color:#ef4444">' + (d.realErrors || 0) + '</b>'
+      + '<span class="dim">（已剔除额度耗尽与限流）</span></div>'
+      + '<div style="margin-top:6px">错误分布：' + errHtml + '</div>'
+      + '<div style="margin-top:6px">裁剪 <b>' + (d.trimHits || 0) + '</b> 次，省下 <b>'
+      + (d.trimSaved || 0).toLocaleString() + '</b> token'
+      + (d.trimRatio ? '（占 <b>' + (d.trimRatio * 100).toFixed(1) + '%</b>）' : '') + '</div>';
+  } catch (e) {
+    el('qualitySummary').innerHTML = '<span class="err">加载失败：' + esc(e.message) + '</span>';
+  }
+}
+
+// 工具使用：谁在空耗 token
+async function loadToolUsage() {
+  try {
+    const r = await api('/api/tools/usage');
+    const s = r.summary || {};
+    const rows = r.rows || [];
+    el('toolUsageSummary').innerHTML =
+      '工具 <b>' + (s.total || 0) + '</b> 个，用过 <b>' + (s.usedEver || 0) + '</b> 个，'
+      + '纯成本 <b style="color:#f59e0b">' + (s.idle || 0) + '</b> 个'
+      + '<span class="dim">（覆盖 ' + (s.requests || 0) + ' 次请求）</span>';
+    if (!rows.length) {
+      el('toolUsageList').innerHTML = '<div class="dim">还没有数据，发起几次请求后再看</div>';
+      return;
+    }
+    const maxShow = 60;
+    el('toolUsageList').innerHTML = rows.slice(0, maxShow).map(t => {
+      const idle = t.idle;
+      return '<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--line)">'
+        + '<span style="width:52px;flex:none;' + (idle ? 'color:#f59e0b' : '') + '">'
+        + (idle ? '[闲置]' : '') + '</span>'
+        + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+        + esc(t.name) + '</span>'
+        + '<span class="dim" style="flex:none">声明 ' + t.declared + ' · 用了 ' + t.used + '</span>'
+        + '</div>';
+    }).join('') + (rows.length > maxShow
+      ? '<div class="dim" style="padding:6px 0">还有 ' + (rows.length - maxShow) + ' 个未显示</div>'
+      : '');
+  } catch (e) {
+    el('toolUsageList').innerHTML = '<span class="err">加载失败：' + esc(e.message) + '</span>';
   }
 }
 
