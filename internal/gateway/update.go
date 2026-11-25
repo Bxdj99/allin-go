@@ -52,6 +52,12 @@ type UpdateStatus struct {
 	Size      int64  `json:"size,omitempty"`
 	Note      string `json:"note,omitempty"`
 	Error     string `json:"error,omitempty"`
+	// LatestSource 说明 Latest 从哪来：release = GitHub Release，
+	// branch = 仓库分支里的 module.prop。前者是「能一键下载的包」，
+	// 后者是「代码已推到哪一版」。两者经常不同步。
+	LatestSource string `json:"latestSource,omitempty"`
+	// BranchVersion 是仓库分支里的版本号（代码实际进度）。
+	BranchVersion string `json:"branchVersion,omitempty"`
 }
 
 // handleUpdateCheck 检查是否有新版。
@@ -203,6 +209,11 @@ func checkUpdate(ctx context.Context) UpdateStatus {
 
 	st.Latest = rel.TagName
 	st.Note = rel.HTMLURL
+	// 记录来源，让面板能说清楚「这个版本号是从哪来的」。
+	// 之前只显示「已是最新版 (v1.34.2)」，而本机跑的是 v1.49.0，
+	// 看起来像版本对不上 —— 实际是 Release 停更在 v1.34.2，
+	// 代码早已推到 v1.49.0 但没打 Release。面板必须解释清楚。
+	st.LatestSource = "release"
 	for _, a := range rel.Assets {
 		if strings.HasPrefix(a.Name, assetName) && strings.HasSuffix(a.Name, ".zip") {
 			st.URL = a.URL
@@ -221,6 +232,8 @@ func checkUpdate(ctx context.Context) UpdateStatus {
 			st.HasUpdate = normalizeVer(st.Latest) != normalizeVer(st.Current)
 		}
 	}
+	// 顺带查一下代码分支的真实版本，面板据此解释「为什么两个数不一样」。
+	st.BranchVersion = fetchBranchVersion(ctx)
 	return st
 }
 
@@ -420,7 +433,6 @@ func updateTempDir() (string, error) {
 	return fallback, fmt.Errorf("找不到可写的临时目录（尝试过 %v，回退 %s 也可能不可写）", candidates, fallback)
 }
 
-
 // copyFile 复制文件到目标路径（目标目录不存在会创建）。
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
@@ -438,4 +450,41 @@ func copyFile(src, dst string) error {
 	defer out.Close()
 	_, err = io.Copy(out, in)
 	return err
+}
+
+// fetchBranchVersion 读仓库分支里 module.prop 的版本号。
+//
+// 为什么要单独查：GitHub Release 和代码进度经常脱节 ——
+// 本机跑 v1.49.0，Release 却停在 v1.34.2，面板显示「已是最新版 (v1.34.2)」，
+// 用户一看就觉得版本对不上。这里把两个数都摆出来，让面板能解释清楚。
+func fetchBranchVersion(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+
+	url := "https://raw.githubusercontent.com/" + repoOwner + "/" + repoName + "/main/module/module.prop"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "allin-go/"+BuildVersion)
+
+	resp, err := provider.HTTPClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return ""
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "version=") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "version="))
+		}
+	}
+	return ""
 }

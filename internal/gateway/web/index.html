@@ -714,6 +714,30 @@
 
 <section class="page" id="page-settings">
   <div class="card">
+    <h2>版本与更新</h2>
+    <details class="fold" open>
+      <summary>
+        <span class="fold-title">当前版本</span>
+        <span class="fold-badge" id="verBadge">—</span>
+        <span class="fold-hint">点开管理更新</span>
+      </summary>
+      <div class="fold-body">
+        <div class="kv"><span>当前版本</span><code id="verCurrent">-</code></div>
+        <div id="verUpdate" style="margin-top:8px"></div>
+        <div class="btnrow" style="margin-top:8px">
+          <button class="btn primary" id="btnCheckUpdate">检查更新</button>
+          <button class="btn" id="btnApplyUpdate" hidden>立即更新</button>
+          <button class="btn" id="btnRestartGateway">重启网关</button>
+        </div>
+        <div class="dim" style="font-size:11px;margin-top:8px">
+          从 GitHub Releases 拉取最新模块包。下载完成后<b>需要重启模块</b>（或在模块管理器里重新运行一次）才会真正应用，账号与配置不受影响。<br>
+          Release 与代码版本可能不一致：前者是「能一键下载的包」，后者是「代码推到哪了」。
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
     <h2>换号策略</h2>
     <details class="fold">
       <summary>
@@ -773,20 +797,6 @@
   </div>
 
   <div class="card">
-    <h2>版本与更新</h2>
-    <div class="kv"><span>当前版本</span><code id="verCurrent">-</code></div>
-    <div id="verUpdate" style="margin-top:8px"></div>
-    <div class="btnrow" style="margin-top:8px">
-      <button class="btn primary" id="btnCheckUpdate">检查更新</button>
-      <button class="btn" id="btnApplyUpdate" hidden>立即更新</button>
-      <button class="btn" id="btnRestartGateway">重启网关</button>
-    </div>
-    <div class="dim" style="font-size:11px;margin-top:8px">
-      从 GitHub Releases 拉取最新模块包。下载完成后<b>需要重启模块</b>（或在模块管理器里重新运行一次）才会真正应用，账号与配置不受影响。
-    </div>
-  </div>
-
-  <div class="card">
     <h2>基本信息</h2>
     <div class="kv"><span>配置文件</span><code id="cfgPath">-</code></div>
     <div class="kv"><span>监听地址</span><code id="cfgListen">-</code></div>
@@ -796,39 +806,64 @@
 
   <div class="card">
     <h2>历史压缩</h2>
-    <div class="dim" style="font-size:12px;margin-bottom:10px">
-      开启后，较早的工具调用（读文件、跑命令等）会被摘要成一行，
-      只保留「调过什么、返回多大」，正文省略。
-    </div>
-    <div class="hint" style="margin-bottom:12px">
-      <b>有得有失：</b>压缩能显著减小请求体，长会话更省 token；<br>
-      但它改变了 prompt 前缀，<b>可能降低上游缓存命中率</b>，极端情况下反而更费积分或更慢。<br>
-      默认开启。如果你更在意稳定性与缓存命中，可以关掉。最近几轮的工具调用始终保留原文。
-    </div>
-    <div class="field">
-      <label>保留最近的工具调用组数（越大越保守）</label>
-      <input id="fKeepRecent" type="number" min="0" max="200" value="6" style="width:120px">
-    </div>
-    <div class="field">
-      <label>输出 token 上限（0 = 不限制；只在客户端传得更大时下调）</label>
-      <input id="fMaxOutput" type="number" min="0" max="2000000" value="0" style="width:160px">
-    </div>
+    <details class="fold">
+      <summary>
+        <span class="fold-title">工具调用摘要</span>
+        <span class="fold-badge" id="compressBadge">—</span>
+        <span class="fold-hint">点开展开设置</span>
+      </summary>
+      <div class="fold-body">
+        <div class="dim" style="font-size:12px;margin-bottom:10px">
+          较早的工具调用（读文件、跑命令等）摘要成一行，只留「调过什么、返回多大」，正文省略。
+          最近几轮工具调用始终保留原文。
+        </div>
+        <div class="field">
+          <label>保留最近的工具调用组数（越大越保守）</label>
+          <input id="fKeepRecent" type="number" min="0" max="200" value="6" style="width:120px">
+        </div>
+        <div class="field">
+          <label>输出 token 上限（0 = 不限制）</label>
+          <input id="fMaxOutput" type="number" min="0" max="2000000" value="0" style="width:160px">
+        </div>
+        <div class="dim" style="font-size:12px;margin:8px 0">
+          <b>有得有失</b>：能显著减小请求体；但改变了 prompt 前缀，
+          <b>可能降低缓存命中率</b>，极端情况下反而更费积分。
+        </div>
+        <div class="btnrow">
+          <button class="btn primary" id="btnCompressToggle">开启压缩</button>
+          <button class="btn" id="btnCompressSave">保存压缩设置</button>
+          <span class="dim" id="compressState" style="font-size:12px"></span>
+        </div>
+      </div>
+    </details>
 
-    <div class="hint" style="margin:12px 0">
-      <b>上下文裁剪预算：</b>单次请求超过这个 token 数就砍掉较早的历史。<br>
-      <b>0 = 默认 95 万</b>（上游硬上限留余量，只在触顶时才裁）。<br>
-      嫌积分花得快可以调低——代价是<b>模型会忘事</b>，砍掉的是真实历史。
-    </div>
-    <div class="field">
-      <label>裁剪预算（token，0 = 默认 95 万）</label>
-      <input id="fTrimBudget" type="number" min="0" max="2000000" value="0" style="width:160px">
-    </div>
-    <div class="btnrow">
-      <button class="btn primary" id="btnCompressToggle">开启压缩</button>
-      <button class="btn" id="btnCompressSave">保存设置</button>
-      <span class="dim" id="compressState" style="font-size:12px"></span>
-    </div>
+    <details class="fold">
+      <summary>
+        <span class="fold-title">上下文裁剪预算</span>
+        <span class="fold-badge" id="trimBadge">—</span>
+        <span class="fold-hint">点开展开设置</span>
+      </summary>
+      <div class="fold-body">
+        <div class="dim" style="font-size:12px;margin-bottom:10px">
+          单次请求超过这个 token 数就砍掉较早的历史。<b>0 = 默认 95 万</b>（上游硬上限留余量，只在触顶时才裁）。
+        </div>
+        <div class="field">
+          <label>裁剪预算（token，0 = 默认 95 万）</label>
+          <input id="fTrimBudget" type="number" min="0" max="2000000" value="0" style="width:160px">
+        </div>
+        <div class="dim" style="font-size:12px;margin:8px 0">
+          嫌积分花得快可以调低——代价是<b>模型会忘事</b>，砍掉的是真实历史。
+        </div>
+        <div class="btnrow">
+          <button class="btn primary" id="btnTrimSave">保存裁剪设置</button>
+          <span class="dim" id="trimState" style="font-size:12px"></span>
+        </div>
+      </div>
+    </details>
   </div>
+
+<div class="card">
+    <h2>系统提示词注入</h2>
 <div class="card">
     <h2>系统提示词注入</h2>
     <div class="dim" style="font-size:12px;margin-bottom:8px">
@@ -1847,6 +1882,8 @@ async function checkUpdate() {
   try {
     const d = await api('/api/update/check');
     el('verCurrent').textContent = d.current || '未知';
+    const vb = el('verBadge');
+    if (vb) { vb.textContent = d.current || '未知'; vb.style.color = '#22c55e'; }
     if (d.error) {
       let hint = '';
       if (/连不上|timeout|TLS|EOF|connection/i.test(d.error || '')) {
@@ -1859,7 +1896,17 @@ async function checkUpdate() {
       return;
     }
     if (!d.hasUpdate) {
-      el('verUpdate').innerHTML = '<span class="ok">已是最新版（' + esc(d.latest) + '）</span>';
+      // 关键：Release 版本和代码版本经常不一致。
+      // 只显示「已是最新版 (v1.34.2)」会让人以为版本对不上 ——
+      // 实际是本机跑 v1.49.0，而 Release 停更在 v1.34.2。
+      let html = '<span class="ok">已是最新发布版</span>';
+      html += '<div class="dim" style="font-size:11px;margin-top:4px">';
+      html += '最新 Release：<b>' + esc(d.latest || '未知') + '</b>（可一键下载的包）';
+      if (d.branchVersion && d.branchVersion !== d.current) {
+        html += '<br>仓库代码版本：<b>' + esc(d.branchVersion) + '</b>（已推送，但还没打 Release）';
+      }
+      html += '</div>';
+      el('verUpdate').innerHTML = html;
       return;
     }
     el('verUpdate').innerHTML =
@@ -2935,6 +2982,143 @@ async function saveSwitchPolicy() {
 
 on('btnSwitchSave', 'click', saveSwitchPolicy);
 on('btnSwitchRefresh', 'click', loadSwitchPolicy);
+
+// 历史压缩 / 上下文裁剪：读当前设置。
+// 这两块之前共用一个「保存设置」按钮，改一个会连带覆盖另一个 ——
+// 用户要求分开，所以读一次数据、各自保存各自的字段。
+let _compressData = null;
+
+async function loadCompress() {
+  try {
+    const d = await api('/api/compress');
+    _compressData = d;
+
+    if (el('fKeepRecent')) el('fKeepRecent').value = d.keepRecent != null ? d.keepRecent : 6;
+    if (el('fMaxOutput')) el('fMaxOutput').value = d.maxOutput || 0;
+    if (el('fTrimBudget')) el('fTrimBudget').value = d.trimBudget || 0;
+
+    // 压缩徽标
+    const cb = el('compressBadge');
+    if (cb) {
+      const on = d.trimEnabled !== false;
+      cb.textContent = on ? '已开启' : '已关闭';
+      cb.style.color = on ? '#22c55e' : 'var(--dim)';
+    }
+    // 裁剪徽标
+    const tb = el('trimBadge');
+    if (tb) {
+      const v = d.trimBudget || 0;
+      tb.textContent = v ? v.toLocaleString() + ' token' : '默认 95 万';
+      tb.style.color = 'var(--dim)';
+    }
+    // 开关按钮文案
+    const btn = el('btnCompressToggle');
+    if (btn) {
+      const on = d.trimEnabled !== false;
+      btn.textContent = on ? '关闭压缩' : '开启压缩';
+      btn.className = on ? 'btn' : 'btn primary';
+    }
+  } catch (e) {
+    toast('读取压缩设置失败：' + e.message, 'err');
+  }
+}
+
+// 只保存压缩相关字段，不碰裁剪预算。
+async function saveCompressOnly() {
+  const body = {
+    keepRecent: parseInt(el('fKeepRecent').value || '0', 10),
+    maxOutput: parseInt(el('fMaxOutput').value || '0', 10),
+  };
+  try {
+    await api('/api/compress/set', { method: 'POST', body });
+    el('compressState').innerHTML = '<span style="color:#22c55e">● 已保存</span>';
+    toast('压缩设置已保存', 'ok');
+    await loadCompress();
+  } catch (e) {
+    toast('保存失败：' + e.message, 'err');
+  }
+}
+
+// 只保存裁剪预算，不碰压缩设置。
+async function saveTrimOnly() {
+  const body = { trimBudget: parseInt(el('fTrimBudget').value || '0', 10) };
+  try {
+    await api('/api/compress/set', { method: 'POST', body });
+    el('trimState').innerHTML = '<span style="color:#22c55e">● 已保存</span>';
+    toast('裁剪预算已保存', 'ok');
+    await loadCompress();
+  } catch (e) {
+    toast('保存失败：' + e.message, 'err');
+  }
+}
+
+// 日志摘要：耗时、状态码分布、采样条数。
+function renderLogSummary(sum) {
+  const box = el('logSummary');
+  if (!box) return;
+  if (!_logsEnabled) {
+    box.innerHTML = '<span class="dim">日志已关闭</span>';
+    return;
+  }
+  const rows = [];
+  if (sum.total != null) rows.push('采样 <b>' + sum.total + '</b> 条');
+  if (sum.avgUpstreamMs != null) rows.push('上游均耗 <b>' + sum.avgUpstreamMs.toFixed(0) + '</b> ms');
+  if (sum.avgOverheadMs != null) rows.push('网关开销 <b>' + sum.avgOverheadMs.toFixed(0) + '</b> ms');
+  if (sum.status) {
+    const parts = Object.keys(sum.status).map(k => k + ' ×<b>' + sum.status[k] + '</b>');
+    if (parts.length) rows.push('状态码 ' + parts.join(' · '));
+  }
+  box.innerHTML = rows.length
+    ? '<div style="font-size:13px">' + rows.join(' ｜ ') + '</div>'
+    : '<span class="dim">暂无采样</span>';
+}
+
+// 请求样本列表。
+function renderLogSamples(samples) {
+  const box = el('logSamples');
+  if (!box) return;
+  if (!samples || !samples.length) {
+    box.innerHTML = '<span class="dim">暂无数据</span>';
+    return;
+  }
+  box.innerHTML = samples.map(x => {
+    const ok = (x.status || 0) >= 200 && (x.status || 0) < 300;
+    const color = ok ? '#22c55e' : '#ef4444';
+    return '<div style="padding:6px 0;border-bottom:1px solid var(--line);font-size:12px">'
+      + '<span style="color:' + color + ';font-weight:600">' + (x.status || '?') + '</span> '
+      + '<span class="dim">' + esc(x.time || '') + '</span> '
+      + esc(x.model || '') + ' '
+      + '<span class="dim">上游 ' + (x.upstreamMs != null ? x.upstreamMs + 'ms' : '-')
+      + ' / 总 ' + (x.totalMs != null ? x.totalMs + 'ms' : '-') + '</span>'
+      + '</div>';
+  }).join('');
+}
+
+// 日志开关按钮的文案与状态。之前重构折叠布局时误删了这个函数，
+// 导致点「开启/关闭日志」直接报 renderLogToggle is not defined。
+function renderLogToggle() {
+  const btn = el('btnLogToggle');
+  if (!btn) return;
+  btn.textContent = _logsEnabled ? '关闭日志' : '开启日志';
+  btn.className = _logsEnabled ? 'btn' : 'btn primary';
+}
+
+on('btnCompressSave', 'click', saveCompressOnly);
+on('btnTrimSave', 'click', saveTrimOnly);
+on('btnCompressToggle', 'click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const on = _compressData && _compressData.trimEnabled !== false;
+    await api('/api/compress/set', { method: 'POST', body: { trimEnabled: !on } });
+    toast(!on ? '压缩已开启' : '压缩已关闭', 'ok');
+    await loadCompress();
+  } catch (err) {
+    toast('切换失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 async function loadLogs() {
   await loadCompress();
