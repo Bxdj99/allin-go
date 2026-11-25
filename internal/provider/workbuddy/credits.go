@@ -36,7 +36,7 @@ const pathUserResource = "/billing/meter/get-user-resource"
 // CreditBucket 是一个资源包的额度明细。
 type CreditBucket struct {
 	Name      string  `json:"name"`
-	Kind      string  `json:"kind,omitempty"`  // gift / plan / extra
+	Kind      string  `json:"kind,omitempty"`   // gift / plan / extra
 	Source    string  `json:"source,omitempty"` // grantSource：growth_travel / growth_checkin…
 	Total     float64 `json:"total"`
 	Used      float64 `json:"used"`
@@ -76,25 +76,28 @@ type CreditSummary struct {
 
 // creditAccount 是上游 Accounts 数组里的一条资源包记录。
 type creditAccount struct {
-	PackageName       string      `json:"PackageName"`
-	ProductName       string      `json:"ProductName"`
-	SubProductCode    string      `json:"SubProductCode"`
-	CapacityUnit      string      `json:"CapacityUnit"`
-	CapacityType      int         `json:"CapacityType"`
-	CapacitySize      json.Number `json:"CapacitySize"`
-	CapacityUsed      json.Number `json:"CapacityUsed"`
-	CapacityRemain    json.Number `json:"CapacityRemain"`
-	SizePrecise       json.Number `json:"CapacitySizePrecise"`
-	UsedPrecise       json.Number `json:"CapacityUsedPrecise"`
-	RemainPrecise     json.Number `json:"CapacityRemainPrecise"`
-	CycleSizePrecise  json.Number `json:"CycleCapacitySizePrecise"`
-	CycleUsedPrecise  json.Number `json:"CycleCapacityUsedPrecise"`
-	CycleRemainPrec   json.Number `json:"CycleCapacityRemainPrecise"`
-	CycleStartTime    string      `json:"CycleStartTime"`
-	CycleEndTime      string      `json:"CycleEndTime"`
-	ExpiredTime       string      `json:"ExpiredTime"`
-	Status            int         `json:"Status"`
-	AccountAttributes []struct {
+	PackageName         string      `json:"PackageName"`
+	ProductName         string      `json:"ProductName"`
+	SubProductCode      string      `json:"SubProductCode"`
+	CapacityUnit        string      `json:"CapacityUnit"`
+	CapacityType        int         `json:"CapacityType"`
+	CapacitySize        json.Number `json:"CapacitySize"`
+	CapacityUsed        json.Number `json:"CapacityUsed"`
+	CapacityRemain      json.Number `json:"CapacityRemain"`
+	SizePrecise         json.Number `json:"CapacitySizePrecise"`
+	UsedPrecise         json.Number `json:"CapacityUsedPrecise"`
+	RemainPrecise       json.Number `json:"CapacityRemainPrecise"`
+	CycleSizePrecise    json.Number `json:"CycleCapacitySizePrecise"`
+	CycleUsedPrecise    json.Number `json:"CycleCapacityUsedPrecise"`
+	CycleRemainPrec     json.Number `json:"CycleCapacityRemainPrecise"`
+	CycleCapacitySize   json.Number `json:"CycleCapacitySize"`
+	CycleCapacityUsed   json.Number `json:"CycleCapacityUsed"`
+	CycleCapacityRemain json.Number `json:"CycleCapacityRemain"`
+	CycleStartTime      string      `json:"CycleStartTime"`
+	CycleEndTime        string      `json:"CycleEndTime"`
+	ExpiredTime         string      `json:"ExpiredTime"`
+	Status              int         `json:"Status"`
+	AccountAttributes   []struct {
 		Key   string `json:"Key"`
 		Value string `json:"Value"`
 		Type  int    `json:"Type"`
@@ -217,19 +220,65 @@ func GetCredits(ctx context.Context, c Customer) (*CreditSummary, error) {
 }
 
 // precise 返回精确口径的 size/used/remain，缺失时退回整数口径。
+// precise 计算一个资源包的「本周期真实可用额度」。
+//
+// 关键：上游同时返回两套余量字段，含义完全不同 ——
+//
+//	CapacityRemain      = 资源包总余量（含下个周期尚未释放的额度）
+//	CycleCapacityRemain = **本周期**余量，才是当下能用的
+//
+// 实测（2026-11-25，CodeBuddy个人体验版）：
+//
+//	CapacitySize=500         CapacityUsed=0   CapacityRemain=500
+//	CycleCapacitySize=500    CycleCapacityUsed=500  CycleCapacityRemain=0
+//	CycleStartTime=2026-11-01  CycleEndTime=2026-11-30
+//
+// 即：本月 500 分已用满，CapacityRemain 那个 500 要下个月才释放。
+// 旧实现优先取 CapacityRemain，把「下周期额度」算成「现在可用」，
+// 于是余额早已耗尽的账号显示还有 500+，保底和选号全部失效。
+// 线上表现就是「面板显示余额足够，实际一用就报额度用尽」。
+//
+// 现在优先用 Cycle* 字段；仅当本周期字段整体缺失（无周期限制的包）时
+// 才退回 Capacity* 口径。
 func (a creditAccount) precise() (size, used, remain float64) {
-	pick := func(prec, plain json.Number) float64 {
-		if v := numF(prec); v > 0 {
-			return v
+	// 依次取第一个 > 0 的值。返回 0 表示全部缺失。
+	pick := func(vals ...json.Number) float64 {
+		for _, v := range vals {
+			if f := numF(v); f > 0 {
+				return f
+			}
 		}
-		return numF(plain)
+		return 0
 	}
-	size = pick(a.SizePrecise, a.CapacitySize)
-	if size == 0 {
-		size = pick(a.CycleSizePrecise, a.CapacitySize)
+
+	capSize := pick(a.SizePrecise, a.CapacitySize)
+	capUsed := pick(a.UsedPrecise, a.CapacityUsed)
+	capRemain := pick(a.RemainPrecise, a.CapacityRemain)
+
+	cycSize := pick(a.CycleSizePrecise, a.CapacitySize)
+	cycUsed := pick(a.CycleUsedPrecise, a.CapacityUsed)
+	cycRemain := pick(a.CycleRemainPrec, a.CycleCapacityRemain)
+
+	hasCycle := pick(a.CycleSizePrecise, a.CycleUsedPrecise, a.CycleRemainPrec) > 0
+
+	if hasCycle {
+		size = cycSize
+		if size == 0 {
+			size = capSize
+		}
+		used = cycUsed
+		remain = cycRemain
+		// 本周期刚好用满是常见状态（remain=0 但 used=size）。
+		// 这里不能再回退去用 CapacityRemain —— 那正是老 bug。
+		if remain == 0 && size > 0 && used > 0 && used < size {
+			remain = size - used
+		}
+		return
 	}
-	used = pick(a.UsedPrecise, a.CapacityUsed)
-	remain = pick(a.RemainPrecise, a.CapacityRemain)
+
+	size = capSize
+	used = capUsed
+	remain = capRemain
 	if remain == 0 && size > 0 && used > 0 && used < size {
 		remain = size - used
 	}

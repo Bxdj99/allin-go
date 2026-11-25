@@ -97,11 +97,45 @@ func (p *Pool) reserveIsStrict() bool {
 	return p.reserveStrict
 }
 
-// accountBelowReserve 判断账号是否「有余额快照且低于保底门槛」。
-// 没有快照的账号不算低于保底 —— 判断不了就不该拦。
+// accountBelowReserve 判断账号是否「不该再派活」。
+//
+// 两种情况都算「低于保底」：
+//  1. 有新鲜快照且余额 < 门槛 —— 明确不够；
+//  2. 快照过期或从未拿到（余额未知）—— 判断不了。
+//
+// 第 2 条是 v1.36.0 的行为变更。旧实现把「未知」当成「够用」，于是
+// 积分刷新一断（超过 creditsStale）保底就整体静默失效：
+// 余额 0 的号照样被选中，日志和面板都没有任何提示。
+// 线上表现就是「设了保底 50，账号耗到 0 还能正常用」。
+//
+// 「是否真的拦」由调用方结合严格模式判断，见 shouldSwitchAway。
 func (p *Pool) accountBelowReserve(st *acctState, now time.Time) bool {
-	if st == nil || st.creditsAt.IsZero() || now.Sub(st.creditsAt) > creditsStale {
+	if st == nil {
 		return false
+	}
+	if p.creditUnknown(st, now) {
+		return p.reserveIsStrict()
+	}
+	return st.remaining < p.creditFloor()
+}
+
+// creditUnknown 判断余额快照是否「过期或不存在」。
+func (p *Pool) creditUnknown(st *acctState, now time.Time) bool {
+	return st == nil || st.creditsAt.IsZero() || now.Sub(st.creditsAt) > creditsStale
+}
+
+// shouldSwitchAway 判断选号时是否应该跳过这个账号。
+//
+// 保底关闭时只挡「余额见底」（CreditsFloor=1）：连 1 分都没有的号派了也白派。
+// 保底开启且严格模式时，余额未知同样跳过 —— 宁可不派，也不拿未知余额的号去烧。
+// 非严格模式保持旧行为：未知就放行，避免用户看到「全部不可用」。
+func (p *Pool) shouldSwitchAway(st *acctState, now time.Time) bool {
+	if st == nil {
+		return false
+	}
+	if p.creditUnknown(st, now) {
+		// 余额未知。严格模式拦，非严格模式放行。
+		return p.reserveActive() && p.reserveIsStrict()
 	}
 	return st.remaining < p.creditFloor()
 }
@@ -202,10 +236,22 @@ func (p *Pool) accountUsable(prov *config.Provider, aid string, exclude map[stri
 			p.mu.Unlock()
 			return nil, false
 		}
-		// 余额低于下限就换号，否则接下来必然失败
-		if st != nil && !st.creditsAt.IsZero() && now.Sub(st.creditsAt) <= creditsStale &&
-			st.remaining < p.creditFloor() {
+		// 余额低于下限就换号，否则接下来必然失败。
+		//
+		// 这里连带处理「余额未知」：快照过期在严格模式下同样视为不可用。
+		// v1.36.0 前只拦「有新鲜快照且确实低于门槛」，快照一过期就静默放行，
+		// 保底形同虚设。
+		//
+		// 会话已绑定的账号也会走到这里：余额跌破门槛时强制解绑换号。
+		// 代价是长对话可能中途换号，换号后上游 prompt cache 会失效一次
+		// （上下文由网关侧维护，对话本身不会断）。
+		if st != nil && p.shouldSwitchAway(st, now) {
 			p.mu.Unlock()
+			if p.creditUnknown(st, now) {
+				log.Printf("[RESERVE] %s 余额快照过期，严格模式下解绑换号", aid)
+			} else {
+				log.Printf("[RESERVE] %s 余额 %.0f 低于门槛 %.0f，解绑换号", aid, st.remaining, p.creditFloor())
+			}
 			return nil, false
 		}
 		if st == nil {
@@ -549,8 +595,7 @@ func (p *Pool) pickLeastLoaded(prov *config.Provider, exclude map[string]bool) *
 		if st != nil && now.Before(st.coolUntil) {
 			continue
 		}
-		if st != nil && !st.creditsAt.IsZero() && now.Sub(st.creditsAt) <= creditsStale &&
-			st.remaining < p.creditFloor() {
+		if p.shouldSwitchAway(st, now) {
 			continue
 		}
 		if fallback == nil {
