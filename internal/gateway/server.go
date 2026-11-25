@@ -99,6 +99,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/quality", s.withAuth(s.handleQuality))
 	// 工具使用统计：哪些工具是纯成本。
 	s.mux.HandleFunc("/api/tools/usage", s.withAuth(s.handleToolUsage))
+	// 换号策略：六类触发点的开关与阈值，附优缺点说明。
+	s.mux.HandleFunc("/api/switch-policy", s.withAuth(s.handleSwitchPolicy))
 	s.mux.HandleFunc("/api/accounts/export", s.withAuth(s.handleAccountsExport))
 	s.mux.HandleFunc("/api/accounts/import", s.withAuth(s.handleAccountsImport))
 	s.mux.HandleFunc("/api/effort", s.withAuth(s.handleEffort))
@@ -140,9 +142,9 @@ func (s *Server) routes() {
 // Start 启动后台任务（Token 自动刷新巡检、WorkBuddy 积分快照刷新）。
 // ctx 取消时全部退出。
 func (s *Server) Start(ctx context.Context) {
-	// 把「切号保底」配置灌进账号池（余额低于保底值的号不再派活）
+	// 把换号策略（含切号保底、缓存保护、冷却开关）灌进账号池。
 	if cfg := s.store.Snapshot(); cfg != nil {
-		s.pool.SetCreditReserve(cfg.Server.CreditReserveEnabled(), cfg.Server.CreditReserveValue(), cfg.Server.CreditReserveStrictEnabled())
+		s.applySwitchPolicy(cfg)
 	}
 	s.startTokenRefresher(ctx)
 	s.startCreditsRefresher(ctx)

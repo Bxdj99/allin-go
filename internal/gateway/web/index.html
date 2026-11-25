@@ -676,6 +676,21 @@
 
 <section class="page" id="page-settings">
   <div class="card">
+    <h2>换号策略（会影响积分成本，改前先看优缺点）</h2>
+    <div class="dim" style="font-size:12px;margin-bottom:12px">
+      换号能让负载分摊、避开死号，但<b>每次换号都会让上游前缀缓存失效</b> ——
+      整段输入从约 10% 计价变成全价。长会话里一次换号的代价可能相当于十次请求。
+      下面每一项都写了优点和缺点，按你的用法选。
+    </div>
+    <div id="switchPolicyList" class="dim">加载中…</div>
+    <div class="btnrow" style="margin-top:12px">
+      <button class="btn primary" id="btnSwitchSave">保存换号策略</button>
+      <button class="btn" id="btnSwitchRefresh">刷新</button>
+      <span class="dim" id="switchState" style="font-size:12px"></span>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>版本与更新</h2>
     <div class="kv"><span>当前版本</span><code id="verCurrent">-</code></div>
     <div id="verUpdate" style="margin-top:8px"></div>
@@ -1035,7 +1050,7 @@ const LOADERS = {
     await loadReserveSetting();
   },
   logs: loadLogs,
-  settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); await checkUpdate(); },
+  settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); await checkUpdate(); await loadSwitchPolicy(); },
 };
 
 function switchTab(name) {
@@ -2668,6 +2683,89 @@ function msClass(v) {
   if (v > 1000) return 'warn';
   return 'ok';
 }
+
+
+// 换号策略面板
+let _switchOptions = [];
+
+async function loadSwitchPolicy() {
+  try {
+    const d = await api('/api/switch-policy');
+    _switchOptions = d.options || [];
+    renderSwitchPolicy();
+  } catch (e) {
+    el('switchPolicyList').innerHTML = '<span class="err">加载失败：' + esc(e.message) + '</span>';
+  }
+}
+
+function riskColor(r) {
+  if (r === 'high') return '#ef4444';
+  if (r === 'mid') return '#f59e0b';
+  return '#22c55e';
+}
+function riskLabel(r) {
+  if (r === 'high') return '影响大';
+  if (r === 'mid') return '需权衡';
+  return '安全';
+}
+
+function renderSwitchPolicy() {
+  const box = el('switchPolicyList');
+  if (!_switchOptions.length) { box.innerHTML = '<div class="dim">暂无</div>'; return; }
+  box.innerHTML = _switchOptions.map(o => {
+    const id = 'sw_' + o.key;
+    let input;
+    if (o.type === 'bool') {
+      input = '<input type="checkbox" id="' + id + '"' + (o.current ? ' checked' : '') + ' style="width:18px;height:18px">';
+    } else {
+      input = '<input id="' + id + '" type="number" min="' + (o.min != null ? o.min : 0)
+        + '" max="' + (o.max != null ? o.max : 1000000) + '" step="any" value="' + o.current
+        + '" style="width:120px">';
+    }
+    return '<div style="padding:10px 0;border-bottom:1px solid var(--line)">'
+      + '<div style="display:flex;align-items:center;gap:10px">'
+      +   '<span style="flex:1;font-weight:600">' + esc(o.name) + '</span>'
+      +   '<span style="font-size:11px;color:' + riskColor(o.risk) + '">' + riskLabel(o.risk) + '</span>'
+      +   input
+      + '</div>'
+      + '<div class="dim" style="font-size:12px;margin-top:4px">' + esc(o.desc) + '</div>'
+      + '<div style="font-size:12px;margin-top:4px"><span style="color:#22c55e">＋</span> ' + esc(o.pros) + '</div>'
+      + '<div style="font-size:12px;margin-top:2px"><span style="color:#ef4444">－</span> ' + esc(o.cons) + '</div>'
+      + '<div class="dim" style="font-size:11px;margin-top:2px">默认：' + o.default + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+async function saveSwitchPolicy() {
+  const body = {};
+  for (const o of _switchOptions) {
+    const e = el('sw_' + o.key);
+    if (!e) continue;
+    if (o.type === 'bool') {
+      body[o.key] = e.checked;
+    } else {
+      const v = parseFloat(e.value);
+      if (isNaN(v)) { toast(o.name + ' 填的不是数字', 'err'); return; }
+      body[o.key] = v;
+    }
+  }
+  const btn = el('btnSwitchSave');
+  btn.disabled = true;
+  try {
+    const r = await api('/api/switch-policy', { method: 'POST', body });
+    _switchOptions = r.options || _switchOptions;
+    renderSwitchPolicy();
+    toast('已保存并生效', 'ok');
+    el('switchState').innerHTML = '<span style="color:#22c55e">● 已生效</span>';
+  } catch (e2) {
+    toast('保存失败：' + e2.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+on('btnSwitchSave', 'click', saveSwitchPolicy);
+on('btnSwitchRefresh', 'click', loadSwitchPolicy);
 
 async function loadLogs() {
   await loadCompress();

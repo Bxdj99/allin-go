@@ -97,6 +97,13 @@ type Pool struct {
 	// load 按「近期真实 token 消耗」给账号打分，用于把重活摊开。
 	// 见 scheduler.go 的说明：只按请求次数轮转会轻重大小不分。
 	load *UsageScheduler
+
+	// 换号策略（可在面板调，见 config.SwitchPolicy）。
+	// 用独立的锁：这些字段和保底字段读写位置不同，共用一把锁会互相拖慢。
+	policyMu        sync.RWMutex
+	protectCache    bool    // 命中率高时不因保底换号
+	cacheKeepRate   float64 // 上面的门槛
+	cooldownOnError bool    // 出错后是否进入冷却
 }
 
 // SetCreditReserve 设置「切号保底」：开启后余额低于 amount 的账号不再派活。
@@ -187,9 +194,12 @@ func (p *Pool) creditFloor() float64 {
 // NewPool 构造账号池。
 func NewPool() *Pool {
 	return &Pool{
-		state:    make(map[string]*acctState),
-		sessions: newSessionTable(),
-		load:     NewUsageScheduler(),
+		state:           make(map[string]*acctState),
+		sessions:        newSessionTable(),
+		load:            NewUsageScheduler(),
+		protectCache:    true,
+		cacheKeepRate:   cacheKeepMinHitRate,
+		cooldownOnError: true,
 	}
 }
 
@@ -286,7 +296,7 @@ func (p *Pool) accountUsable(prov *config.Provider, aid string, exclude map[stri
 			//   切到新账号（余额 1500，命中 0%） → 实际 54.9 万 token
 			// 为保住 47 积分而多花 10 倍 token，明显是亏的。
 			rate, known := p.CacheHealth(prov.ID, aid)
-			if known && rate >= cacheKeepMinHitRate {
+			if p.cacheProtectOn() && known && rate >= p.cacheKeepRateValue() {
 				log.Printf("[RESERVE] %s 余额 %.0f 低于门槛 %.0f，但缓存命中 %.0f%%，继续用（换号会丢缓存）",
 					aid, st.remaining, p.creditFloor(), rate*100)
 				// 保持可用：不换号，继续沿用。下面走和正常路径一样的收尾。
@@ -626,6 +636,12 @@ func (p *Pool) fail(pid, aid string, status int, reason, errBody string) {
 	st.failures++
 	st.lastFailure = reason
 
+	// 冷却可关：关掉后账号出错也不进入冷却，下次照样可能被选中。
+	// 好处是单账号场景不会因一次抖动就被晾着；坏处是死号会被反复重试。
+	if !p.cooldownOnErrorOn() {
+		return
+	}
+
 	var cool time.Duration
 	switch {
 	case status == 401 || status == 403:
@@ -858,4 +874,35 @@ func (p *Pool) LoadOf(pid, aid string) float64 {
 // RecordCacheRate 由网关在记账时调用，记录账号的缓存命中情况。
 func (p *Pool) RecordCacheRate(pid, aid string, cacheRead, prompt int64, known bool) {
 	recordCacheRate(pid, aid, cacheRead, prompt, known)
+}
+
+// SetSwitchPolicy 应用换号策略（面板改完即时生效）。
+func (p *Pool) SetSwitchPolicy(protectCache bool, cacheKeepRate float64, cooldownOnError bool) {
+	p.policyMu.Lock()
+	defer p.policyMu.Unlock()
+	p.protectCache = protectCache
+	if cacheKeepRate > 0 && cacheKeepRate <= 1 {
+		p.cacheKeepRate = cacheKeepRate
+	} else {
+		p.cacheKeepRate = cacheKeepMinHitRate
+	}
+	p.cooldownOnError = cooldownOnError
+}
+
+func (p *Pool) cacheProtectOn() bool {
+	p.policyMu.RLock()
+	defer p.policyMu.RUnlock()
+	return p.protectCache
+}
+
+func (p *Pool) cacheKeepRateValue() float64 {
+	p.policyMu.RLock()
+	defer p.policyMu.RUnlock()
+	return p.cacheKeepRate
+}
+
+func (p *Pool) cooldownOnErrorOn() bool {
+	p.policyMu.RLock()
+	defer p.policyMu.RUnlock()
+	return p.cooldownOnError
 }

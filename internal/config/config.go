@@ -57,6 +57,9 @@ type Server struct {
 	// TrimEnabled 是上下文裁剪开关，默认开启。
 	// 关掉后完全不做 token 裁剪（上游嫌大时仍会兜底重裁，否则请求必失败）。
 	TrimEnabled *bool `json:"trimEnabled,omitempty"`
+
+	// SwitchPolicy 是换号策略集合。零值等于「全部使用默认」。
+	SwitchPolicy SwitchPolicy `json:"switchPolicy,omitempty"`
 	// CreditReserve 是「切号保底」开关。默认关闭。
 	//
 	// 开启后，剩余积分低于 CreditReserveAmount 的账号不再被派活，
@@ -88,9 +91,14 @@ func (s *Server) CreditReserveEnabled() bool {
 }
 
 // CreditReserveValue 返回保底保留的积分数，默认 20。
+// CreditReserveValue 返回保底值，默认 10。
+//
+// v1.46.0 从 20 下调到 10：实测账号剩 47 分就触发换号，
+// 而那次换号让 54.9 万 token 从缓存价变全价，多花约 10 倍。
+// 留 10 分足够防「余额刚好不够一次请求」，不必为了守大额底仓频繁牺牲缓存。
 func (s *Server) CreditReserveValue() float64 {
 	if s.CreditReserveAmount == nil || *s.CreditReserveAmount < 0 {
-		return 20
+		return 10
 	}
 	return *s.CreditReserveAmount
 }
