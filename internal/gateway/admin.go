@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -257,10 +258,17 @@ func (s *Server) doCheckin(origin string, a *config.Account) (credit, streak int
 	client := &http.Client{Timeout: 40 * time.Second, Transport: provider.HTTPClient.Transport}
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("[CHECKIN] %s 网络错误: %v", a.ID, err)
 		return 0, 0, "network", err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+
+	// 签到是自动任务的核心，失败时必须留下上游原话，否则只能猜。
+	// 线上踩过：连续 4 天日志里只有 checkin:failed，没有任何响应体，
+	// 根因完全无从判断。这里把状态码与响应体（截断）打进日志。
+	// 响应体里可能含账号标识，但不含 token —— token 只在请求头里。
+	log.Printf("[CHECKIN] %s http=%d body=%s", a.ID, resp.StatusCode, truncate(string(raw), 400))
 
 	var env struct {
 		Code int    `json:"code"`
@@ -273,11 +281,14 @@ func (s *Server) doCheckin(origin string, a *config.Account) (credit, streak int
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			log.Printf("[CHECKIN] %s 凭据失效 http=%d", a.ID, resp.StatusCode)
 			return 0, 0, "sign_in_required", fmt.Errorf("凭据失效（HTTP %d）", resp.StatusCode)
 		}
+		log.Printf("[CHECKIN] %s 响应非 JSON http=%d", a.ID, resp.StatusCode)
 		return 0, 0, "bad_response", fmt.Errorf("上游返回非 JSON（HTTP %d）", resp.StatusCode)
 	}
 	if env.Code == 0 {
+		log.Printf("[CHECKIN] %s ok credit=%d streak=%d", a.ID, env.Data.Credit, env.Data.StreakDays)
 		return env.Data.Credit, env.Data.StreakDays, "ok", nil
 	}
 	if strings.Contains(env.Msg, "已签到") || strings.Contains(strings.ToLower(env.Msg), "already") {
@@ -289,6 +300,7 @@ func (s *Server) doCheckin(origin string, a *config.Account) (credit, streak int
 		// 这里用 heatmap 当日 score 交叉验证：有分才算真已签，无分说明状态位
 		// 与事实不符，降级为 failed（不写 checkinDate，允许下一轮重试）。
 		if scored, known := heatmapTodayScored(origin, a); known && !scored {
+			log.Printf("[CHECKIN] %s stale_flag（上游说已签但 heatmap score=0）code=%d msg=%q", a.ID, env.Code, env.Msg)
 			return 0, 0, "stale_flag", fmt.Errorf("上游返回「已签到」但当天无签到记录（heatmap score=0），已视为未签到")
 		}
 		// 10001 的 data 是空的，credit/streak 全是零值。streak 这里补查一次，
@@ -300,6 +312,7 @@ func (s *Server) doCheckin(origin string, a *config.Account) (credit, streak int
 		}
 		return env.Data.Credit, env.Data.StreakDays, "already", nil
 	}
+	log.Printf("[CHECKIN] %s rejected code=%d msg=%q", a.ID, env.Code, env.Msg)
 	return 0, 0, "rejected", fmt.Errorf("%s", env.Msg)
 }
 

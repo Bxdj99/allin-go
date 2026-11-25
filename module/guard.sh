@@ -56,6 +56,15 @@ file_sum() {
     echo "$1-$2"
 }
 
+# 只搬网关 stdout 日志，不动配置。
+# 签到这种「跑完就要看结果」的场景单独调它，避免等 10 分钟一轮的 sync_back。
+flush_runlog() {
+    if [ -s "$RUNLOG" ]; then
+        cat "$RUNLOG" >> "$GWLOG" 2>/dev/null
+        : > "$RUNLOG" 2>/dev/null
+    fi
+}
+
 sync_back() {
     if [ -f "$RUNDATA/config.json" ]; then
         cp -f "$RUNDATA/config.json" "$MODDATA/config.json" 2>/dev/null
@@ -64,7 +73,9 @@ sync_back() {
         cp -f "$SCHED_STATE" "$MODDATA/schedule.state" 2>/dev/null
     fi
     if [ -s "$RUNLOG" ]; then
-        tail -n 500 "$RUNLOG" >> "$GWLOG" 2>/dev/null
+        # 全量搬，不再只 tail 500 行。
+        # 签到失败时要看上游原话，尾部截断会正好把 [CHECKIN] 那些行切掉。
+        cat "$RUNLOG" >> "$GWLOG" 2>/dev/null
         : > "$RUNLOG" 2>/dev/null
     fi
 }
@@ -264,6 +275,10 @@ while true; do
                     log "workbuddy tasks slot=$slot 返回异常: $(echo "$RESP" | cut -c1-200)"
                     ;;
             esac
+            # 跑完立刻把网关日志搬进 gateway.log。
+            # 否则 sync_back 的日志搬运要等 ticks%10（最多 10 分钟），
+            # 用户跑完马上来看日志会看不到任何 [CHECKIN] 记录。
+            flush_runlog
             sync_back
         else
             log "workbuddy tasks slot=$slot 跳过：配置里读不到 authKey"
