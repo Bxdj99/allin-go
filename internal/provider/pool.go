@@ -154,7 +154,8 @@ func (p *Pool) accountBelowReserve(st *acctState, now time.Time) bool {
 	if p.creditUnknown(st, now) {
 		return p.reserveIsStrict()
 	}
-	return st.remaining < p.creditFloor()
+	// 与 shouldSwitchAway 保持一致：<= 门槛就算不足。
+	return st.remaining <= p.creditFloor()
 }
 
 // creditUnknown 判断余额快照是否「过期或不存在」。
@@ -175,7 +176,10 @@ func (p *Pool) shouldSwitchAway(st *acctState, now time.Time) bool {
 		// 余额未知。严格模式拦，非严格模式放行。
 		return p.reserveActive() && p.reserveIsStrict()
 	}
-	return st.remaining < p.creditFloor()
+	// 用 <= 而不是 <：用户明确要求「到 5 及以下就换号，别烧到 0」。
+	// 门槛 5 时，余额正好 5 也视为该换 —— 留一次请求的余量，
+	// 避免「这次刚好用完最后一次额度」再报错。
+	return st.remaining <= p.creditFloor()
 }
 
 // creditFloor 返回当前生效的余额下限：
@@ -523,7 +527,7 @@ func (p *Pool) pickRanked(prov *config.Provider, exclude map[string]bool, mode s
 		//
 		// 只在这个账号**确实有读数且低于门槛**时剔除；
 		// 余额未知交给严格模式决定（非严格视为可用，避免「全部不可用」）。
-		if st != nil && !p.creditUnknown(st, now) && st.remaining < p.creditFloor() {
+		if st != nil && !p.creditUnknown(st, now) && st.remaining <= p.creditFloor() {
 			if lowFallback == nil {
 				lowFallback, lowFallbackState = a, st
 			}
