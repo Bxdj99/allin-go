@@ -32,6 +32,12 @@ type SwitchPolicy struct {
 	// --- 4. 重试上限 ---
 	// MaxAttempts 一个请求最多尝试几个账号。0 用默认 3。
 	MaxAttempts *int `json:"maxAttempts,omitempty"`
+
+	// SessionMinCredits 是新会话的最低余额门槛。0 表示不限制。
+	//
+	// 新会话本来没有缓存可保，此时挑一个余额厚的号比挑负载最轻的号更值：
+	// 会话一旦开头绑在低余额号上，中途换号就要重建缓存。
+	SessionMinCredits *float64 `json:"sessionMinCredits,omitempty"`
 }
 
 // ReserveAmountValue 返回余额保底值；未配置或 0 时用 10。
@@ -99,4 +105,12 @@ func (s *Server) SwitchPolicyOf() SwitchPolicy {
 		p.ReserveStrict = s.CreditReserveStrict
 	}
 	return p
+}
+
+// SessionMinCreditsValue 返回新会话最低余额门槛，默认 0（不限制）。
+func (p SwitchPolicy) SessionMinCreditsValue() float64 {
+	if p.SessionMinCredits == nil || *p.SessionMinCredits < 0 {
+		return 0
+	}
+	return *p.SessionMinCredits
 }

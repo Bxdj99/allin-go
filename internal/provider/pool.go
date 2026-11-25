@@ -104,6 +104,8 @@ type Pool struct {
 	protectCache    bool    // 命中率高时不因保底换号
 	cacheKeepRate   float64 // 上面的门槛
 	cooldownOnError bool    // 出错后是否进入冷却
+	// minSessionCredits 是新会话的最低余额门槛，0 表示不限制。
+	minSessionCredits float64
 }
 
 // SetCreditReserve 设置「切号保底」：开启后余额低于 amount 的账号不再派活。
@@ -310,8 +312,12 @@ func (p *Pool) accountUsable(prov *config.Provider, aid string, exclude map[stri
 			//   留在原账号（余额 47，命中 99.9%）→ 等效约 5.5 万 token
 			//   切到新账号（余额 1500，命中 0%） → 实际 54.9 万 token
 			// 为保住 47 积分而多花 10 倍 token，明显是亏的。
+			// 严格模式压过缓存保护：
+			// 用户开了严格模式就是明确表态「宁可丢缓存，也不动底仓」。
+			// 此时余额跌破门槛一律换号，不再看命中率。
+			strictNow := p.reserveActive() && p.reserveIsStrict()
 			rate, known := p.CacheHealth(prov.ID, aid)
-			if p.cacheProtectOn() && known && rate >= p.cacheKeepRateValue() {
+			if !strictNow && p.cacheProtectOn() && known && rate >= p.cacheKeepRateValue() {
 				log.Printf("[RESERVE] %s 余额 %.0f 低于门槛 %.0f，但缓存命中 %.0f%%，继续用（换号会丢缓存）",
 					aid, st.remaining, p.creditFloor(), rate*100)
 				// 保持可用：不换号，继续沿用。下面走和正常路径一样的收尾。
@@ -325,8 +331,15 @@ func (p *Pool) accountUsable(prov *config.Provider, aid string, exclude map[stri
 				return a, true
 			}
 			p.mu.Unlock()
-			if p.creditUnknown(st, now) {
-				log.Printf("[RESERVE] %s 余额快照过期，严格模式下解绑换号", aid)
+			if strictNow {
+				if p.creditUnknown(st, now) {
+					log.Printf("[RESERVE] %s 余额未知，严格模式强制换号（忽略缓存保护）", aid)
+				} else {
+					log.Printf("[RESERVE] %s 余额 %.0f 低于门槛 %.0f，严格模式强制换号（忽略缓存保护）",
+						aid, st.remaining, p.creditFloor())
+				}
+			} else if p.creditUnknown(st, now) {
+				log.Printf("[RESERVE] %s 余额快照过期，解绑换号", aid)
 			} else {
 				log.Printf("[RESERVE] %s 余额 %.0f 低于门槛 %.0f，解绑换号", aid, st.remaining, p.creditFloor())
 			}
@@ -800,6 +813,18 @@ func (p *Pool) pickLeastLoaded(prov *config.Provider, exclude map[string]bool) *
 		if fallback == nil {
 			fallback = a
 		}
+		// 新会话门槛：余额达到 minSessionCredits 的账号优先。
+		//
+		// 为什么单独一档：新会话本来没有缓存可保，
+		// 此时「挑余额厚的号」比「挑负载最轻的号」更值 ——
+		// 会话一旦开头绑在低余额号上，中途换号就得重建缓存。
+		if minC := p.sessionCreditsValue(); minC > 0 {
+			st := p.state[key(prov.ID, a.ID)]
+			if st != nil && !p.creditUnknown(st, now) && st.remaining < minC {
+				continue
+			}
+		}
+
 		load := p.sessions.loadOf(a.ID)
 		if bestLoad < 0 || load < bestLoad {
 			best, bestLoad = a, load
@@ -937,4 +962,17 @@ func (p *Pool) CreditsOf(pid, aid string) (float64, bool) {
 // 选号规则改动后调用，避免旧绑定把请求继续钉在原来的账号上。
 func (p *Pool) ResetSessions() {
 	p.sessions.Reset()
+}
+
+// SetSessionCredits 设置新会话最低余额门槛（0 = 不限制）。
+func (p *Pool) SetSessionCredits(min float64) {
+	p.policyMu.Lock()
+	p.minSessionCredits = min
+	p.policyMu.Unlock()
+}
+
+func (p *Pool) sessionCreditsValue() float64 {
+	p.policyMu.RLock()
+	defer p.policyMu.RUnlock()
+	return p.minSessionCredits
 }

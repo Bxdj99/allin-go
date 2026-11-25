@@ -27,7 +27,8 @@ func TestCacheKeepsAccountBelowReserve(t *testing.T) {
 	// cold：余额充足但没缓存数据
 	p.SetCredits(pid, "cold", 1500, time.Now().Add(time.Hour))
 
-	p.SetCreditReserve(true, 50, true) // 严格模式
+	// 非严格模式：缓存保护生效（严格模式下会强制换号，那是另一个用例）
+	p.SetCreditReserve(true, 50, false)
 
 	// 先建立会话绑定到 hot
 	p.sessions.Bind("sess-1", "hot")
@@ -105,5 +106,48 @@ func TestCacheRateIgnoresUnknown(t *testing.T) {
 	p.RecordCacheRate("wb", "y", 0, 1000, false) // known=false
 	if _, known := p.CacheHealth("wb", "y"); known {
 		t.Error("上游没报缓存字段时不该产生统计")
+	}
+}
+
+// 严格模式压过缓存保护：用户开严格模式就是明确表态「宁可丢缓存也不动底仓」。
+// 实测反馈：即使命中 99%，余额跌破门槛也必须换号。
+func TestStrictModeOverridesCacheProtection(t *testing.T) {
+	p := NewPool()
+	pr := prov(pid, acct("hot"), acct("rich"))
+	pr.RouteMode = config.RouteSticky
+
+	p.SetCredits(pid, "hot", 5, time.Now().Add(time.Hour))
+	p.RecordCacheRate(pid, "hot", 540000, 545000, true) // 命中 99%
+	p.SetCredits(pid, "rich", 500, time.Now().Add(time.Hour))
+	p.SetCreditReserve(true, 10, true) // 严格模式
+
+	p.sessions.Bind("sess-1", "hot")
+	got := p.PickForSession(pr, nil, "sess-1")
+	if got == nil {
+		t.Fatal("应能选出账号")
+	}
+	if got.ID == "hot" {
+		t.Error("严格模式下余额 5 低于门槛 10，即使缓存命中 99% 也必须换号")
+	}
+}
+
+// 非严格模式下，同样的场景应当保住缓存。
+func TestNonStrictKeepsCacheAccount(t *testing.T) {
+	p := NewPool()
+	pr := prov(pid, acct("hot"), acct("rich"))
+	pr.RouteMode = config.RouteSticky
+
+	p.SetCredits(pid, "hot", 5, time.Now().Add(time.Hour))
+	p.RecordCacheRate(pid, "hot", 540000, 545000, true)
+	p.SetCredits(pid, "rich", 500, time.Now().Add(time.Hour))
+	p.SetCreditReserve(true, 10, false) // 非严格
+
+	p.sessions.Bind("sess-1", "hot")
+	got := p.PickForSession(pr, nil, "sess-1")
+	if got == nil {
+		t.Fatal("应能选出账号")
+	}
+	if got.ID != "hot" {
+		t.Errorf("非严格模式下应保住高命中率的 hot，实际 %q", got.ID)
 	}
 }

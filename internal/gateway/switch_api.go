@@ -51,13 +51,14 @@ func (s *Server) handleSwitchPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var in struct {
-		ReserveAmount   *float64 `json:"reserveAmount"`
-		ReserveStrict   *bool    `json:"reserveStrict"`
-		ProtectCache    *bool    `json:"protectCache"`
-		CacheKeepRate   *float64 `json:"cacheKeepRate"`
-		CooldownOnError *bool    `json:"cooldownOnError"`
-		LoadBalance     *bool    `json:"loadBalance"`
-		MaxAttempts     *int     `json:"maxAttempts"`
+		ReserveAmount     *float64 `json:"reserveAmount"`
+		ReserveStrict     *bool    `json:"reserveStrict"`
+		ProtectCache      *bool    `json:"protectCache"`
+		CacheKeepRate     *float64 `json:"cacheKeepRate"`
+		CooldownOnError   *bool    `json:"cooldownOnError"`
+		LoadBalance       *bool    `json:"loadBalance"`
+		MaxAttempts       *int     `json:"maxAttempts"`
+		SessionMinCredits *float64 `json:"sessionMinCredits"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "JSON 解析失败: " + err.Error()})
@@ -71,6 +72,10 @@ func (s *Server) handleSwitchPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.CacheKeepRate != nil && (*in.CacheKeepRate < 0 || *in.CacheKeepRate > 1) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "缓存保护门槛需在 0-1 之间（0.5 = 50%）"})
+		return
+	}
+	if in.SessionMinCredits != nil && (*in.SessionMinCredits < 0 || *in.SessionMinCredits > 1_000_000) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "新会话余额门槛需在 0-1000000 之间（0=不限制）"})
 		return
 	}
 	if in.MaxAttempts != nil && (*in.MaxAttempts < 1 || *in.MaxAttempts > 10) {
@@ -110,6 +115,10 @@ func (s *Server) handleSwitchPolicy(w http.ResponseWriter, r *http.Request) {
 		v := *in.MaxAttempts
 		next.MaxAttempts = &v
 	}
+	if in.SessionMinCredits != nil {
+		v := *in.SessionMinCredits
+		next.SessionMinCredits = &v
+	}
 	cfg.Server.SwitchPolicy = next
 
 	if err := s.store.Save(cfg); err != nil {
@@ -131,6 +140,7 @@ func (s *Server) applySwitchPolicy(cfg *config.Config) {
 	pol := cfg.Server.SwitchPolicyOf()
 	s.pool.SetCreditReserve(true, pol.ReserveAmountValue(), pol.ReserveStrictOn())
 	s.pool.SetSwitchPolicy(pol.ProtectCacheOn(), pol.CacheKeepRateValue(), pol.CooldownOnErrorOn())
+	s.pool.SetSessionCredits(pol.SessionMinCreditsValue())
 	s.applyCreditReserve(cfg)
 }
 
@@ -166,10 +176,10 @@ func switchOptions(pol config.SwitchPolicy) []switchOption {
 		},
 		{
 			Key:  "reserveStrict",
-			Name: "严格模式",
-			Desc: "全部账号都低于保底时直接拒绝，而不是挑最富的用",
-			Pros: "不会把最后一点余额烧光，便于你提前知道该充值了",
-			Cons: "会出现「所有账号低于保底」的 503，看起来像故障；实际是你在保护余额",
+			Name: "严格模式（压过缓存保护）",
+			Desc: "余额跌破保底就强制换号，忽略缓存保护；全部账号都不够时直接拒绝",
+			Pros: "开启后在「保余额」和「保缓存」之间明确选前者；实测你设的 5-10 分门槛会强制换到厚号",
+			Cons: "换号必然丢一次缓存；全部低于保底时会 503，看起来像故障",
 			Type: "bool", Default: false, Current: pol.ReserveStrictOn(),
 			Risk: "mid",
 		},
@@ -190,6 +200,15 @@ func switchOptions(pol config.SwitchPolicy) []switchOption {
 			Cons: "会打破会话绑定；每切一次号就丢一次缓存，长会话反而更贵",
 			Type: "bool", Default: true, Current: pol.LoadBalanceOn(),
 			Risk: "high",
+		},
+		{
+			Key:  "sessionMinCredits",
+			Name: "新会话余额门槛",
+			Desc: "新开的会话优先绑余额达到这个值的账号；0 = 不限制",
+			Pros: "会话开头就绑在余额厚的号上，不容易中途换号，缓存更稳",
+			Cons: "门槛设太高（如 99）会把低余额账号全部排除，一旦厚号耗尽可能无号可用",
+			Type: "number", Default: 0, Current: pol.SessionMinCreditsValue(),
+			Min: 0, Max: 1000000, Risk: "mid",
 		},
 		{
 			Key:  "maxAttempts",
