@@ -608,28 +608,13 @@
 
   <div class="card">
     <h2>切号保底</h2>
-    <div class="dim" style="font-size:12px;margin-bottom:10px">
-      开启后，剩余积分低于保底值的账号<b>不再被派活</b>，相当于给每个号留一笔底仓，避免用到彻底枯竭。
+    <div class="dim" style="font-size:12px">
+      保底、严格模式、缓存保护统一在「设置 → 换号与保底」里调，
+      这里不再单独放一份 —— 两处都能改同一个开关时，
+      很容易改了一边以为生效、实际被另一边覆盖。
     </div>
-    <div class="hint" style="margin-bottom:12px">
-      注意：如果所有账号都低于保底值，网关仍会挑一个余额最高的用——总比直接失败好。
-      所以这是"尽量留"，不是"绝对不动"。
-    </div>
-    <div class="field">
-      <label>保底保留积分</label>
-      <input id="fReserveAmount" type="number" min="0" max="1000000" step="1" value="20" style="width:140px">
-    </div>
-    <div class="field">
-      <label>严格模式</label>
-      <div class="btnrow" style="margin:0">
-        <button class="btn sm" id="btnReserveStrict">—</button>
-        <span class="dim" id="reserveStrictHint" style="font-size:12px"></span>
-      </div>
-    </div>
-    <div class="btnrow">
-      <button class="btn primary" id="btnReserveToggle">开启保底</button>
-      <button class="btn" id="btnReserveSave">保存保底值</button>
-      <span class="dim" id="reserveState" style="font-size:12px"></span>
+    <div class="btnrow" style="margin-top:8px">
+      <button class="btn" id="btnGotoSwitchPolicy">去设置里调整</button>
     </div>
   </div>
 
@@ -1164,7 +1149,6 @@ const LOADERS = {
     await loadUsage();
     await loadCreditStatsToggle();
     await loadCreditStats();
-    await loadReserveSetting();
   },
   logs: loadLogs,
   settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); await checkUpdate(); await loadSwitchPolicy(); await loadRoutingRules(); },
@@ -3364,95 +3348,12 @@ async function loadCreditStats() {
 }
 
 on('btnCreditStatsRefresh', 'click', loadCreditStats);
-let _reserveOn = false;
-let _reserveStrict = false;
 
-function renderReserveStrict() {
-  const b = el('btnReserveStrict');
-  if (!b) return;
-  if (_reserveStrict) {
-    b.textContent = '关闭严格模式';
-    b.className = 'btn sm danger';
-    el('reserveStrictHint').innerHTML = '<span style="color:#ef4444">● 已开启</span>　全部账号低于保底时直接报错，不动底仓';
-  } else {
-    b.textContent = '开启严格模式';
-    b.className = 'btn sm';
-    el('reserveStrictHint').innerHTML = '<span class="dim">○ 已关闭</span>　全部低于保底时仍会挑一个用';
-  }
-}
+// 保底 / 严格模式 / 缓存保护统一在「设置 → 换号与保底」里调。
+// 这里曾经有一份独立的开关，和设置页改同一个字段 ——
+// 两处都能改时很容易「改了一边以为生效、实际被另一边覆盖」，已合并。
+on('btnGotoSwitchPolicy', 'click', () => switchTab('settings'));
 
-on('btnReserveStrict', 'click', async (e) => {
-  const btn = e.currentTarget;
-  btn.disabled = true;
-  try {
-    const r = await api('/api/compress/set', { method: 'POST', body: { reserveStrict: !_reserveStrict } });
-    _reserveStrict = r.reserveStrict === true;
-    renderReserveStrict();
-    toast(_reserveStrict ? '已开启严格模式' : '已关闭严格模式', 'ok');
-  } catch (err) {
-    toast('切换失败：' + err.message, 'err');
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-function renderReserveToggle() {
-  const b = el('btnReserveToggle');
-  if (!b) return;
-  if (_reserveOn) {
-    b.textContent = '关闭保底';
-    b.className = 'btn';
-    el('reserveState').innerHTML = '<span style="color:#22c55e">● 已开启</span>';
-  } else {
-    b.textContent = '开启保底';
-    b.className = 'btn primary';
-    el('reserveState').innerHTML = '<span class="dim">○ 已关闭</span>（余额见底才停）';
-  }
-}
-
-async function loadReserveSetting() {
-  try {
-    const d = await api('/api/compress');
-    _reserveOn = d.creditReserve === true;
-    _reserveStrict = d.reserveStrict === true;
-    el('fReserveAmount').value = d.reserveAmount != null ? d.reserveAmount : 20;
-    renderReserveToggle();
-    renderReserveStrict();
-  } catch (e) { /* 读不到按默认显示 */ }
-}
-
-on('btnReserveToggle', 'click', async (e) => {
-  const btn = e.currentTarget;
-  btn.disabled = true;
-  try {
-    const r = await api('/api/compress/set', { method: 'POST', body: { creditReserve: !_reserveOn } });
-    _reserveOn = r.creditReserve === true;
-    renderReserveToggle();
-    toast(_reserveOn ? '已开启切号保底' : '已关闭切号保底', 'ok');
-  } catch (err) {
-    toast('切换失败：' + err.message, 'err');
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-on('btnReserveSave', 'click', async (e) => {
-  const btn = e.currentTarget;
-  const v = parseFloat(el('fReserveAmount').value);
-  if (isNaN(v) || v < 0 || v > 1000000) { toast('保底值需在 0-1000000 之间', 'err'); return; }
-  btn.disabled = true;
-  try {
-    const r = await api('/api/compress/set', { method: 'POST', body: { reserveAmount: v } });
-    el('fReserveAmount').value = r.reserveAmount;
-    _reserveOn = r.creditReserve === true;
-    renderReserveToggle();
-    toast('已保存：保底 ' + r.reserveAmount + ' 积分', 'ok');
-  } catch (err) {
-    toast('保存失败：' + err.message, 'err');
-  } finally {
-    btn.disabled = false;
-  }
-});
 
 let _creditStatsOn = true;
 
