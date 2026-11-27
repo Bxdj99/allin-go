@@ -735,8 +735,13 @@
           对所有带 refresh token 的账号立刻请求一次续期（不等快过期）。
           自动续期只在到期前才动手，这里是想提前刷新时用。
         </div>
+        <div class="field">
+          <label>每日自动保活小时（逗号分隔，如 22；留空 = 关闭）</label>
+          <input id="fKeepaliveHours" type="text" placeholder="22" style="width:160px">
+        </div>
         <div class="btnrow">
           <button class="btn primary" id="btnKeepalive">立即保活</button>
+          <button class="btn" id="btnKeepaliveSave">保存每日保活</button>
           <span class="dim" id="kaState" style="font-size:12px"></span>
         </div>
         <div id="kaResult" style="margin-top:10px;font-size:12px"></div>
@@ -1173,7 +1178,7 @@ const LOADERS = {
     await loadCreditStats();
   },
   logs: loadLogs,
-  settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); await checkUpdate(); await loadSwitchPolicy(); await loadRoutingRules(); },
+  settings: async () => { await loadSettings(); await loadKeys(); await loadPrompt(); await loadEffort(); await checkUpdate(); await loadSwitchPolicy(); await loadRoutingRules(); await loadKeepaliveHours(); },
 };
 
 function switchTab(name) {
@@ -2896,6 +2901,36 @@ async function saveRoutingRules() {
 on('btnRouteSave', 'click', saveRoutingRules);
 on('btnRouteRefresh', 'click', loadRoutingRules);
 
+
+
+// 每日保活设置：读 / 存 keepaliveHours
+async function loadKeepaliveHours() {
+  try {
+    const d = await api('/api/schedule');
+    const hrs = d.keepaliveHours || [];
+    const input = el('fKeepaliveHours');
+    if (input) input.value = hrs.join(',');
+    const badge = el('kaBadge');
+    if (badge && !badge.textContent.startsWith('成功')) {
+      badge.textContent = hrs.length ? '每日 ' + hrs.join(',') + ' 点' : '每日保活已关闭';
+      badge.style.color = hrs.length ? '#22c55e' : 'var(--dim)';
+    }
+  } catch (e) { /* 读不到就不填 */ }
+}
+
+async function saveKeepaliveHours() {
+  const raw = (el('fKeepaliveHours').value || '').trim();
+  const hrs = raw === '' ? [] : raw.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n >= 0 && n <= 23);
+  try {
+    const d = await api('/api/schedule', { method: 'POST', body: { keepaliveHours: hrs } });
+    toast(hrs.length ? '每日保活已设为 ' + hrs.join(',') + ' 点' : '每日保活已关闭', 'ok');
+    el('kaState').innerHTML = '<span style="color:#22c55e">● 已保存</span>';
+    await loadKeepaliveHours();
+  } catch (e) {
+    toast('保存失败：' + e.message, 'err');
+  }
+}
+on('btnKeepaliveSave', 'click', saveKeepaliveHours);
 
 // Token 保活：立刻把所有带 refresh 的账号续一遍。
 async function runKeepalive() {

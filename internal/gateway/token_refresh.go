@@ -29,6 +29,13 @@ const (
 var refreshMu sync.Mutex
 
 // startTokenRefresher 启动后台刷新循环。在网关启动时调用一次。
+//
+// 两条线并行（v1.55.0）：
+//   - 每 10 分钟：只刷「快到期」的，作为兜底。
+//   - 每天固定时刻（keepaliveHours，默认 22 点）：全量续一遍，
+//     让 token 始终新鲜，避免刚好在请求边界过期。
+//
+// 这样对齐 wb2api 的「每晚 22:00 token 保活」，同时保留细粒度兜底。
 func (s *Server) startTokenRefresher(ctx context.Context) {
 	go func() {
 		// 启动后稍等一会儿再第一次巡检，避开启动高峰
@@ -37,10 +44,18 @@ func (s *Server) startTokenRefresher(ctx context.Context) {
 			return
 		case <-time.After(2 * time.Minute):
 		}
+
+		lastKeepaliveSlot := ""
 		ticker := time.NewTicker(tokenRefreshInterval)
 		defer ticker.Stop()
 		for {
-			s.refreshExpiringTokens(ctx)
+			// 每日全量保活：判断「当前小时命中 keepaliveHours 且今天这小时还没跑过」
+			if s.maybeDailyKeepalive(ctx, &lastKeepaliveSlot) {
+				// 刚跑完全量，本轮不必再扫快过期的
+			} else {
+				s.refreshExpiringTokens(ctx)
+			}
+
 			select {
 			case <-ctx.Done():
 				return
@@ -48,6 +63,59 @@ func (s *Server) startTokenRefresher(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// maybeDailyKeepalive 到了设定的整点就做一次全量保活。
+//
+// 返回 true 表示这一轮已经跑过全量保活。
+// slot 用「年月日-小时」做幂等键，保证同一个小时间只跑一次
+// （10 分钟 ticker 会在一小时内命中 6 次，不能每次都刷）。
+func (s *Server) maybeDailyKeepalive(ctx context.Context, lastSlot *string) bool {
+	cfg := s.store.Snapshot()
+	if cfg == nil {
+		return false
+	}
+	hours := cfg.Schedule.KeepaliveHoursValue()
+	if len(hours) == 0 {
+		return false // 空 = 关闭每日保活
+	}
+
+	now := time.Now()
+	cur := now.Hour()
+	hit := false
+	for _, h := range hours {
+		if h == cur {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		return false
+	}
+
+	slot := now.Format("20060102-15")
+	if *lastSlot == slot {
+		return false
+	}
+	*lastSlot = slot
+
+	if !refreshMu.TryLock() {
+		return false // 手动保活正在跑
+	}
+	defer refreshMu.Unlock()
+
+	kctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	log.Printf("每日 Token 保活开始（%s 点档）", slot)
+	cfg2, _, okN, skipN, failN, changed := s.keepaliveAll(kctx, "")
+	if changed && cfg2 != nil {
+		if err := s.store.Save(cfg2); err != nil {
+			log.Printf("每日保活结果保存失败: %v", err)
+		}
+	}
+	log.Printf("每日 Token 保活完成：成功 %d / 跳过 %d / 失败 %d", okN, skipN, failN)
+	return true
 }
 
 // refreshExpiringTokens 扫描所有供应商的账号，把快过期的刷掉。
@@ -73,10 +141,13 @@ func (s *Server) refreshExpiringTokens(ctx context.Context) {
 			// 这种情况不能直接跳过：token 可能已经失效，
 			// 交给 pool 的 needRelogin 标记判断该不该刷。
 			if a.Expires > 0 && a.Expires-now > tokenRefreshLead.Milliseconds() {
-				// 还没到提前刷新窗口，但如果已标记需重登，仍要尝试续期
-				if !s.pool.NeedRelogin(p.ID, a.ID) {
-					continue
-				}
+				// 还没到提前刷新窗口 —— 跳过。
+				//
+				// 之前这里还允许「已标 needRelogin 的号继续试」，结果是
+				// 被吊销的账号每 10 分钟重试一次（一天 144 次），全是白打。
+				// 现在这类账号交给每日全量保活处理（一天一次），
+				// 既不漏掉「万一恢复了」，也不刷屏刷请求。
+				continue
 			}
 			if err := s.refreshOne(ctx, p, a); err == nil {
 				changed = true

@@ -328,6 +328,27 @@ type ScheduleConfig struct {
 	AutoCheckin *bool `json:"autoCheckin,omitempty"`
 	// CheckinHours 是每天执行的小时（默认 9 点与 21 点）。
 	CheckinHours []int `json:"checkinHours,omitempty"`
+
+	// KeepaliveHours 是每天做 Token 全量保活的小时，默认 [22]（对齐 wb2api）。
+	//
+	// 为什么需要它：自动续期只在「快到期」时才动手，token 可能刚好在
+	// 某个请求边界过期。每天固定时刻全量续一遍，token 始终新鲜。
+	// 传空数组表示关闭每日保活（只保留 10 分钟巡检兜底）。
+	KeepaliveHours *[]int `json:"keepaliveHours,omitempty"`
+}
+
+// KeepaliveHoursValue 返回每日保活小时，默认 [22]。
+func (sc ScheduleConfig) KeepaliveHoursValue() []int {
+	if sc.KeepaliveHours == nil {
+		return []int{22}
+	}
+	out := make([]int, 0, len(*sc.KeepaliveHours))
+	for _, h := range *sc.KeepaliveHours {
+		if h >= 0 && h <= 23 {
+			out = append(out, h)
+		}
+	}
+	return out // 空切片 = 关闭
 }
 
 // AutoCheckinEnabled 返回开关状态，未配置时默认 true。
