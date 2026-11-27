@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"allin/internal/provider/workbuddy"
@@ -21,6 +22,39 @@ import (
 // refreshCredits 对「凭据失效」的账号做了退避，见该函数。
 const creditsRefreshInterval = 90 * time.Second
 
+// 刷新失败后的退避。断网时不该每 90 秒都去撞一次。
+//
+// 实测：11-27 凌晨断网 8 小时，产生 1189 条「积分刷新失败」，
+// 全是同一句「network is unreachable」。既刷屏又白耗电量。
+// 现在连续失败就逐步拉长间隔，一成功立刻回到 90 秒。
+var (
+	// creditsMu 保护下面两个字段：刷新在 goroutine 里，读间隔在主循环。
+	creditsMu         sync.Mutex
+	creditsFailStreak int           // 连续失败轮数
+	creditsBackoff    time.Duration // 当前退避时长（预留）
+)
+
+// 退避阶梯：90s（正常）→ 3min → 6min → 12min → 24min（封顶）
+const creditsBackoffMax = 24 * time.Minute
+
+// nextRefreshDelay 根据连续失败次数算下一轮该等多久。
+func nextRefreshDelay() time.Duration {
+	creditsMu.Lock()
+	streak := creditsFailStreak
+	creditsMu.Unlock()
+	if streak <= 0 {
+		return creditsRefreshInterval
+	}
+	d := creditsRefreshInterval
+	for i := 0; i < streak; i++ {
+		d *= 2
+		if d >= creditsBackoffMax {
+			return creditsBackoffMax
+		}
+	}
+	return d
+}
+
 // creditsRefreshTimeout 是一次全量刷新的总超时。
 const creditsRefreshTimeout = 60 * time.Second
 
@@ -35,13 +69,14 @@ func (s *Server) startCreditsRefresher(ctx context.Context) {
 		// 启动时先刷一次：否则重启后头 10 分钟选号拿不到积分信息
 		refresh()
 
-		t := time.NewTicker(creditsRefreshInterval)
-		defer t.Stop()
+		// 用动态间隔而不是固定 Ticker：连续失败要退避，
+		// 否则断网时会每 90 秒撞一次，白耗电还刷屏。
 		for {
+			d := nextRefreshDelay()
 			select {
 			case <-ctx.Done():
 				return
-			case <-t.C:
+			case <-time.After(d):
 				refresh()
 			}
 		}
@@ -88,12 +123,16 @@ func (s *Server) refreshCredits(parent context.Context) {
 	defer cancel()
 
 	var wg sync.WaitGroup
+	// 记录本轮成败，用于退避判断。全失败才退避，
+	// 部分成功（比如 4 个 401 死号 + 8 个正常）不该拉长间隔。
+	var okCount, failCount atomic.Int64
 	for _, j := range jobs {
 		wg.Add(1)
 		go func(j job) {
 			defer wg.Done()
 			sum, err := workbuddy.GetCredits(ctx, j.customer)
 			if err != nil {
+				failCount.Add(1)
 				// 查不到就保留旧快照，让它自然过期失效，不要清零余额
 				if isAuthError(err) {
 					// 鉴权失败：下面会打 needRelogin 标记，之后的轮次直接跳过，
@@ -135,9 +174,30 @@ func (s *Server) refreshCredits(parent context.Context) {
 				}
 			}
 			s.pool.SetCreditsFull(j.providerID, j.accountID, sum.Remaining, sum.Total, resetAt)
+			okCount.Add(1)
 		}(j)
 	}
 	wg.Wait()
+
+	// 退避判断：只有「一个都没成功」才认为网络/上游整体不可用。
+	// 部分失败是账号自身问题（401 死号），不该拖慢整体刷新。
+	if okCount.Load() == 0 && failCount.Load() > 0 {
+		creditsMu.Lock()
+		creditsFailStreak++
+		first := creditsFailStreak == 1
+		creditsMu.Unlock()
+		if first {
+			log.Printf("积分刷新全部失败，进入退避（下一轮 %v 后）", nextRefreshDelay())
+		}
+	} else {
+		creditsMu.Lock()
+		was := creditsFailStreak
+		creditsFailStreak = 0
+		creditsMu.Unlock()
+		if was > 0 {
+			log.Printf("积分刷新恢复（此前连续失败 %d 轮）", was)
+		}
+	}
 }
 
 // parseCreditTime 解析 CreditSummary.ResetAt（格式 "2006-01-02 15:04"，UTC+8）。

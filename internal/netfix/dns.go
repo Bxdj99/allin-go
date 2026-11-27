@@ -30,18 +30,28 @@ func Setup() []string {
 			PreferGo: true,
 			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
 				dialer := net.Dialer{Timeout: 4 * time.Second}
-				var lastErr error
+				// 逐个尝试，并记录**每个**服务器的失败原因。
+				//
+				// 之前只返回最后一个错误，日志里永远是
+				//   dial udp 8.8.8.8:53: connect: network is unreachable
+				// 让人误以为是 8.8.8.8 有问题 —— 实际是三个全挂了（断网）。
+				// 现在汇总全部失败，一眼看出是「全部不可达」还是「某个 DNS 挂了」。
+				var fails []string
 				for _, srv := range servers {
 					conn, err := dialer.DialContext(ctx, "udp", srv)
 					if err == nil {
 						return conn, nil
 					}
-					lastErr = err
+					fails = append(fails, srv+"（"+shortErr(err)+"）")
 				}
-				if lastErr == nil {
-					lastErr = &net.DNSError{Err: "没有可用的 DNS 服务器", IsNotFound: false}
+				if len(fails) == 0 {
+					return nil, &net.DNSError{Err: "没有可用的 DNS 服务器", IsNotFound: false}
 				}
-				return nil, lastErr
+				detail := strings.Join(fails, "；")
+				if len(servers) > 1 && allUnreachable(fails) {
+					detail = "全部 DNS 都不可达（大概率是断网或飞行模式）: " + detail
+				}
+				return nil, &net.DNSError{Err: detail, IsNotFound: false}
 			},
 		}
 	})
@@ -94,4 +104,40 @@ func getprop(name string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// shortErr 把拨号错误压缩成一句可读的话。
+func shortErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "network is unreachable"):
+		return "网络不可达"
+	case strings.Contains(msg, "connection refused"):
+		return "拒绝连接"
+	case strings.Contains(msg, "i/o timeout"), strings.Contains(msg, "deadline exceeded"):
+		return "超时"
+	case strings.Contains(msg, "no such host"):
+		return "查不到主机"
+	}
+	if len(msg) > 60 {
+		msg = msg[:60] + "…"
+	}
+	return msg
+}
+
+// allUnreachable 判断是不是所有服务器都报「网络不可达」。
+// 这种情况几乎必然是整个网络断了，而不是某个 DNS 有问题。
+func allUnreachable(fails []string) bool {
+	if len(fails) == 0 {
+		return false
+	}
+	for _, f := range fails {
+		if !strings.Contains(f, "网络不可达") {
+			return false
+		}
+	}
+	return true
 }
