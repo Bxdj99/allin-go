@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -79,6 +80,15 @@ func (s *Server) refreshExpiringTokens(ctx context.Context) {
 			}
 			if err := s.refreshOne(ctx, p, a); err == nil {
 				changed = true
+				// 续期成功必须清掉 needRelogin 标记。
+				//
+				// 不清的话：账号被标「需重登」→ 积分刷新跳过它 →
+				// 即使 token 已经换成新的，也永远不再被使用。
+				// 线上见过 4 个账号卡在这个状态，明明能跑却一直被跳过。
+				if s.pool.NeedRelogin(p.ID, a.ID) {
+					s.pool.MarkNeedRelogin(p.ID, a.ID, false)
+					log.Printf("续期成功，已清除「需重登」标记: %s/%s", p.ID, a.ID)
+				}
 			}
 		}
 	}
