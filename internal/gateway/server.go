@@ -103,6 +103,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/switch-policy", s.withAuth(s.handleSwitchPolicy))
 	// 选号规则：四种策略 + 优先账号，附优缺点说明。
 	s.mux.HandleFunc("/api/routing-rules", s.withAuth(s.handleRoutingRules))
+	// 手动触发 Token 保活：立刻把所有带 refresh 的账号续一遍。
+	s.mux.HandleFunc("/api/tokens/keepalive", s.withAuth(s.handleTokenKeepalive))
 	s.mux.HandleFunc("/api/accounts/export", s.withAuth(s.handleAccountsExport))
 	s.mux.HandleFunc("/api/accounts/import", s.withAuth(s.handleAccountsImport))
 	s.mux.HandleFunc("/api/effort", s.withAuth(s.handleEffort))

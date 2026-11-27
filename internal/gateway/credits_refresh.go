@@ -145,12 +145,13 @@ func (s *Server) refreshCredits(parent context.Context) {
 				// 让 Pick 跳过它。否则每次请求都可能选中一个死号，
 				// 白等一轮上游往返再换号，首字延迟白白翻倍。
 				if isAuthError(err) {
+					// 走 pool.Fail 的累计逻辑，而不是首次就判死。
+					//
+					// 之前这里首次 401 就打 needRelogin，等于一条 401 就废掉账号。
+					// 而 401 也可能来自瞬时故障（网络中间层、上游抖动），
+					// 一刀切会把还能用的号误杀 —— 实测有账号因此被永久跳过。
+					// pool.Fail 自己会在连续 3 次后标 needRelogin，够了。
 					s.pool.Fail(j.providerID, j.accountID, 401, "积分接口鉴权失败")
-					// 积分接口返回 401 是确定性信号（这里只查余额，不涉及推理），
-					// 直接打 needRelogin 标记，让后续轮次跳过它。
-					// 不这么做的话，本轮 90 秒要等到 pool.Fail 累计 3 次才生效，
-					// 期间会白刷 6 分钟的必失败请求。
-					s.pool.MarkNeedRelogin(j.providerID, j.accountID, true)
 				}
 				return
 			}

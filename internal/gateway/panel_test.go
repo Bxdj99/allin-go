@@ -106,6 +106,7 @@ func TestPanelCriticalFunctionsDefined(t *testing.T) {
 		"renderLogToggle", "loadCompress", "loadQuality", "loadToolUsage",
 		"renderToolList", "loadSwitchPolicy", "loadRoutingRules",
 		"loadCompress", "saveCompressOnly", "saveTrimOnly",
+		"runKeepalive",
 	} {
 		if !strings.Contains(s, "function "+fn+"(") && !strings.Contains(s, "function "+fn+" (") {
 			t.Errorf("缺少函数定义: %s", fn)
@@ -121,5 +122,16 @@ func TestCompressAndTrimHaveSeparateButtons(t *testing.T) {
 	}
 	if !strings.Contains(s, `id="btnTrimSave"`) {
 		t.Error("缺少裁剪保存按钮 btnTrimSave")
+	}
+}
+
+// Token 保活按钮必须存在，且绑定到 /api/tokens/keepalive。
+func TestKeepaliveButtonWired(t *testing.T) {
+	s := readPanel(t)
+	if !strings.Contains(s, `id="btnKeepalive"`) {
+		t.Error("缺少保活按钮 btnKeepalive")
+	}
+	if !strings.Contains(s, "/api/tokens/keepalive") {
+		t.Error("保活按钮没有指向 /api/tokens/keepalive")
 	}
 }

@@ -723,6 +723,28 @@
   </div>
 
   <div class="card">
+    <h2>Token 保活</h2>
+    <details class="fold">
+      <summary>
+        <span class="fold-title">立即续期所有账号</span>
+        <span class="fold-badge" id="kaBadge">—</span>
+        <span class="fold-hint">点开展开</span>
+      </summary>
+      <div class="fold-body">
+        <div class="dim" style="font-size:12px;margin-bottom:10px">
+          对所有带 refresh token 的账号立刻请求一次续期（不等快过期）。
+          自动续期只在到期前才动手，这里是想提前刷新时用。
+        </div>
+        <div class="btnrow">
+          <button class="btn primary" id="btnKeepalive">立即保活</button>
+          <span class="dim" id="kaState" style="font-size:12px"></span>
+        </div>
+        <div id="kaResult" style="margin-top:10px;font-size:12px"></div>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
     <h2>换号策略</h2>
     <details class="fold">
       <summary>
@@ -2873,6 +2895,39 @@ async function saveRoutingRules() {
 
 on('btnRouteSave', 'click', saveRoutingRules);
 on('btnRouteRefresh', 'click', loadRoutingRules);
+
+
+// Token 保活：立刻把所有带 refresh 的账号续一遍。
+async function runKeepalive() {
+  const btn = el('btnKeepalive');
+  btn.disabled = true;
+  el('kaState').innerHTML = '<span class="dim">正在续期…</span>';
+  el('kaResult').innerHTML = '';
+  try {
+    const r = await api('/api/tokens/keepalive', { method: 'POST' });
+    const badge = el('kaBadge');
+    if (badge) {
+      badge.textContent = '成功 ' + (r.success || 0) + ' / 失败 ' + (r.failed || 0);
+      badge.style.color = (r.failed || 0) > 0 ? '#f59e0b' : '#22c55e';
+    }
+    const rows = (r.results || []).map(x => {
+      const st = x.ok ? '<span style="color:#22c55e">成功</span>'
+        : x.skipped ? '<span class="dim">跳过：' + esc(x.skipped) + '</span>'
+        : '<span style="color:#ef4444">失败：' + esc(x.error || '') + '</span>';
+      return '<div style="padding:3px 0;border-bottom:1px solid var(--line)">'
+        + esc(x.name || x.accountId || '') + ' ' + st + '</div>';
+    }).join('');
+    el('kaResult').innerHTML = rows || '<span class="dim">没有可续期的账号</span>';
+    el('kaState').innerHTML = '<span style="color:#22c55e">● 完成</span>';
+    toast('保活完成：成功 ' + (r.success || 0) + '，失败 ' + (r.failed || 0), r.failed ? 'warn' : 'ok');
+  } catch (e) {
+    el('kaState').innerHTML = '<span class="err">失败：' + esc(e.message) + '</span>';
+    toast('保活失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+on('btnKeepalive', 'click', runKeepalive);
 
 // 换号策略面板
 let _switchOptions = [];
