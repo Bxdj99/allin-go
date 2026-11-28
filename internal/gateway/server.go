@@ -122,6 +122,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/switch-policy", s.withAuth(s.handleSwitchPolicy))
 	// 选号规则：四种策略 + 优先账号，附优缺点说明。
 	s.mux.HandleFunc("/api/routing-rules", s.withAuth(s.handleRoutingRules))
+	// 虚拟模型路由组：group/<id> 的增删改查 + 全局开关。
+	// 这功能原本只有后端解析（provider.Resolve）和配置字段，没有入口，
+	// 等于用户开不出来 —— 所以「上游有路由我这没有」。
+	s.mux.HandleFunc("/api/groups", s.withAuth(s.handleGroups))
 	// 手动触发 Token 保活：立刻把所有带 refresh 的账号续一遍。
 	s.mux.HandleFunc("/api/tokens/keepalive", s.withAuth(s.handleTokenKeepalive))
 	s.mux.HandleFunc("/api/accounts/export", s.withAuth(s.handleAccountsExport))
@@ -340,6 +344,21 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 	// 客户端请求体里的档位也要能读到（resolveEffort 需要它做 auto 模式判断）
 	var reqFields map[string]json.RawMessage
 	_ = json.Unmarshal(body, &reqFields)
+	// 路由组：先用策略算出本次的尝试顺序，再把第一个目标当作真实模型去解析。
+	//
+	// 为什么在 gateway 层做而不是塞进 provider.Resolve：
+	//   - round-robin 要靠进程内游标跨请求记住位置，属于「服务状态」，
+	//     放进纯函数 Resolve 里会污染所有调用方（面板列举、探测、expose 全都会跳号）
+	//   - 失败休息表同理，只有真正发请求的人才该登记
+	// 顺序主备本身就是重试链，groupOrder 返回整个顺序，
+	// 后续失败换模型的循环直接顺着往下走即可。
+	groupTargets, groupID := groupTargetsFor(cfg, modelNoSuffix)
+	if len(groupTargets) > 0 {
+		modelNoSuffix = groupTargets[0]
+		log.Printf("[GROUP] %s -> 策略展开首个目标 %q（共 %d 个候选）",
+			head.Model, modelNoSuffix, len(groupTargets))
+	}
+
 	p, _, realModel, err := provider.Resolve(cfg, modelNoSuffix)
 	if err != nil {
 		// 模型解析失败都是「客户端参数问题」，统一 400。
@@ -757,6 +776,14 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 						d.Reason != workbuddy.StopStatusNotRetryable {
 						log.Printf("thinking 签名拒绝但不重发（%s）: %s/%s", d.Reason, sp.ID, acct.ID)
 					}
+				}
+
+				// 路由组：上游这次明确不给用，让这个目标休息一会儿，
+				// 下个请求 groupOrder 会把它排到队尾，避免一直撞同一堵墙。
+				// 只登记「真拒绝」，网络层失败在上面已 continue，不进这里。
+				if groupID != "" && (resp.StatusCode >= 500 || resp.StatusCode == 429 || resp.StatusCode == 401) {
+					groupRestPut(groupID, step.Model, groupRestCooldown(resp.StatusCode))
+					log.Printf("[GROUP] %s 目标 %q 休息（status=%d）", groupID, step.Model, resp.StatusCode)
 				}
 
 				// 上游明确要求不重试时，直接停下。

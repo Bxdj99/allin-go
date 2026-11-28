@@ -285,11 +285,19 @@ func (p *Provider) IsModelExposed(model string) bool {
 	return false
 }
 
-// Group 是路由组：按顺序挑目标。
+// Group 是路由组：按策略从 targets 里挑一个真正干活的模型。
+//
+//	策略 order        顺序主备，取第一个能解析的
+//	策略 round-robin  轮询均摊，每次请求顺延
+//	策略 manual       固定用 Pick 指定的那个
+//
+// 对齐上游 Java 版的同名概念：客户端用 "group/<id>" 调，网关内部展开成真实
+// 的 provider/model 再转发，所以对客户端而言它就是一个普通模型名。
 type Group struct {
 	ID       string   `json:"id"`
 	Name     string   `json:"name,omitempty"`
-	Strategy string   `json:"strategy,omitempty"` // order / round-robin
+	Strategy string   `json:"strategy,omitempty"` // order / round-robin / manual
+	Pick     string   `json:"pick,omitempty"`     // manual 策略下固定的目标
 	Targets  []string `json:"targets,omitempty"`  // provider/model
 }
 
