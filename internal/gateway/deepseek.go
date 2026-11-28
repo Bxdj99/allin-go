@@ -411,7 +411,8 @@ func (s *Server) forwardDeepSeek(w http.ResponseWriter, r *http.Request, p *conf
 	tried := map[string]bool{}
 	sessKey := provider.SessionKey(p.ID, sessionFingerprint(body))
 	var lastErr error
-	for attempt := 0; attempt < maxAccountAttempts; attempt++ {
+	maxAttempts := s.maxAccountAttempts()
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		acct := s.pool.PickForSession(p, tried, sessKey)
 		uc.accountID = acct.ID
 		if acct == nil {

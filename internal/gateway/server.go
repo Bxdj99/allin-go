@@ -31,8 +31,27 @@ import (
 // maxBodyBytes 是单个请求体的上限，防止有人拿它当上传通道。
 const maxBodyBytes = 8 << 20 // 8 MiB
 
-// maxAccountAttempts 是一条请求最多尝试几个账号（换号重试）。
-const maxAccountAttempts = 3
+// defaultMaxAccountAttempts 是「一条请求最多尝试几个账号」的缺省值。
+//
+// 实际值从配置读（SwitchPolicy.MaxAttempts），面板可调。
+// 之前这里是写死的 const，于是面板上那个「最大尝试账号数」是假配置 ——
+// 改成 1 也不生效，实际永远按 3 跑。用户实测发现后修掉。
+const defaultMaxAccountAttempts = 3
+
+// maxAccountAttempts 返回当前生效的最大尝试账号数。
+//
+// 必须**在循环外调用一次**再把结果用于 for 条件，
+// 否则每轮都重新读一次 Snapshot，既浪费又可能在循环中途变化。
+func (s *Server) maxAccountAttempts() int {
+	if s == nil || s.store == nil {
+		return defaultMaxAccountAttempts
+	}
+	cfg := s.store.Snapshot()
+	if cfg == nil {
+		return defaultMaxAccountAttempts
+	}
+	return cfg.Server.SwitchPolicyOf().MaxAttemptsValue()
+}
 
 // Server 是网关实例。
 type Server struct {
@@ -601,7 +620,8 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, apiPath string,
 				prevRelease(0)
 			}
 		}()
-		for attempt := 0; attempt < maxAccountAttempts; attempt++ {
+		maxAttempts := s.maxAccountAttempts()
+		for attempt := 0; attempt < maxAttempts; attempt++ {
 			acct := s.pool.PickForSession(sp, tried, sessKey)
 			if acct == nil {
 				// 分清「没有账号可用」与「账号都被保底拦住了」：
