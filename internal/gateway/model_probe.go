@@ -82,7 +82,12 @@ func (s *Server) handleModelProbe(w http.ResponseWriter, r *http.Request) {
 	var probeFn func(model string) ModelProbe
 
 	if wbKind {
-		var acc *config.Account
+		// 为什么收集【一批】候选账号而不是挑一个：
+		// 实测 14 个账号里有 4 个 access token 已失效（HTTP 401）。
+		// 旧实现只取第一个就 break，正好挑中失效账号时，
+		// 整页 17 个模型会全部标成「错误」——但换任何好账号都是 ok。
+		// 用户看到的就是「我这模型都失败咋回事」，实际只是探测选错了号。
+		var cands []*config.Account
 		for _, a := range p.Accounts {
 			if a == nil || !a.IsEnabled() || a.Key() == "" || a.UID == "" {
 				continue
@@ -90,15 +95,16 @@ func (s *Server) handleModelProbe(w http.ResponseWriter, r *http.Request) {
 			if in.AccountID != "" && a.ID != in.AccountID {
 				continue
 			}
-			acc = a
-			break
+			cands = append(cands, a)
 		}
-		if acc == nil {
+		if len(cands) == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "没有可用账号"})
 			return
 		}
-		cust := workbuddy.NewCustomer(acc.UID, acc.Key(), acc.Domain, "", "", p.ID == "workbuddy-ai")
-		probeFn = func(model string) ModelProbe { return probeWorkBuddyModel(ctx, cust, model) }
+		// 用「先挑一个健康的当基准」的方式构造探测函数
+		probeFn = func(model string) ModelProbe {
+			return probeWorkBuddyWithFallback(ctx, p.ID, cands, model)
+		}
 	} else {
 		probeFn = func(model string) ModelProbe { return s.probeViaGateway(ctx, p.ID, model) }
 	}
@@ -363,4 +369,62 @@ func (s *Server) listenPort() int {
 // readLimited 读最多 n 字节。
 func readLimited(r io.Reader, n int) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r, int64(n)))
+}
+
+// isCredError 判断探测结果是不是「这个账号本身的凭据坏了」。
+//
+// 只有这类错误才值得换账号重试。模型不允许（11158）、本站没有（11102）、
+// 额度耗尽（6004/4011）都是账号/模型维度的真实结论，换号也是同一个答案，
+// 重试只会白白多打几次上游。
+func isCredError(mp ModelProbe) bool {
+	if mp.OK {
+		return false
+	}
+	if mp.Code == 11158 || mp.Code == 11102 || mp.Code == 6004 || mp.Code == 4011 {
+		return false
+	}
+	m := strings.ToLower(mp.Msg)
+	return strings.Contains(m, "401") ||
+		strings.Contains(m, "403") ||
+		strings.Contains(m, "凭据失效") ||
+		strings.Contains(m, "unauthorized") ||
+		strings.Contains(m, "invalid token") ||
+		strings.Contains(m, "token expired")
+}
+
+// probeWorkBuddyWithFallback 在多个账号之间挑一个「能用」的来探测模型。
+//
+// 对同一个模型，依次用候选账号试：
+//   - 拿到明确业务码（不允许 / 本站无 / 限流）→ 立刻返回，这是真实结论
+//   - 凭据失效（401/403）→ 换下一个账号再试
+//   - ok → 立刻返回
+//
+// 全部账号都凭据失效时，如实返回最后一个错误（并注明试了几个号），
+// 而不是谎报成「模型不可用」。
+func probeWorkBuddyWithFallback(ctx context.Context, providerID string, cands []*config.Account, model string) ModelProbe {
+	if len(cands) == 0 {
+		return ModelProbe{Model: model, Status: "error", Msg: "没有可用账号"}
+	}
+	// 最多试 5 个号：够覆盖零星的坏 token，又不至于把探测拖成几分钟
+	tryN := len(cands)
+	if tryN > 5 {
+		tryN = 5
+	}
+
+	var last ModelProbe
+	for i := 0; i < tryN; i++ {
+		a := cands[i]
+		cust := workbuddy.NewCustomer(a.UID, a.Key(), a.Domain, "", "", providerID == "workbuddy-ai")
+		mp := probeWorkBuddyModel(ctx, cust, model)
+		mp.Model = model
+
+		if mp.OK || !isCredError(mp) {
+			// 真实结论（可用 / 不允许 / 本站无 / 限流 / 空响应），直接采信
+			return mp
+		}
+		last = mp
+		// 这个号凭据坏了，换下一个
+	}
+	last.Msg = truncateStr("试了 "+itoaSmall(tryN)+" 个账号都是凭据失效，请重新登录："+last.Msg, 140)
+	return last
 }
