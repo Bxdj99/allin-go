@@ -1020,6 +1020,15 @@ func (s *Server) relayTrae(w http.ResponseWriter, resp *http.Response, stream, n
 		if err != nil {
 			log.Printf("Trae 响应聚合失败: %v", err)
 			uc.fail(providerID, model)
+			// 关键：trae 的限流/鉴权失败是「HTTP 200 + body 里带 code」，
+			// 走不到上面那段按 resp.StatusCode 判 429/401 的逻辑，
+			// 于是账号不会冷却 —— 客户端一重试就等于继续往限流窗口里砸请求，
+			// 越砸窗口越长。实测连打 95 次后恢复时间被显著拉长。
+			//
+			// 这里按错误语义补一次冷却：
+			//   4011 / rate limit → 账号冷却（窗口限流）
+			//   1001 / 401        → 标凭据失效
+			traeMarkAccountState(s, providerID, uc.accountID, err)
 			s.fail(w, http.StatusBadGateway, "Trae 响应聚合失败: "+err.Error())
 			return
 		}
@@ -1420,3 +1429,30 @@ const (
 // maxSoftRetries 是「上游瞬态拒绝」的原地重发次数。
 // 11148 属瞬时状态，重发通常就过；给 2 次足够，避免掩盖真问题。
 const maxSoftRetries = 2
+
+// traeMarkAccountState 给 trae 类的「200 + body 错误码」补上账号状态处理。
+//
+// 为什么需要单独一个函数：trae 上游把业务错误放在 200 响应的 body 里，
+// 前面按 HTTP 状态码写的 401/429 分支完全看不到它。
+// 不改的话，限流和凭据失效都不会影响选号，客户端重试会无限打在同一个死号上。
+func traeMarkAccountState(s *Server, providerID, accountID string, err error) {
+	if s == nil || err == nil {
+		return
+	}
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+
+	switch {
+	case strings.Contains(msg, "4011") || strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "exceeded"):
+		// 窗口限流：转成 429 交给 pool 的既有逻辑处理。
+		// 它会区分「窗口限流」和「额度用尽」并给出不同冷却时长，
+		// 比自己另写一套冷却更安全（不会被上游判成持续攻击）。
+		s.pool.FailWithBody(providerID, accountID, 429, "Trae 限流（4011）", msg)
+		log.Printf("[TRAE] %s/%s 上游限流，已按 429 冷却", providerID, accountID)
+	case strings.Contains(msg, "1001") || strings.Contains(lower, "authenticate"):
+		// 凭据失效：直接标需要重登，避免每轮都白打一次
+		s.pool.MarkNeedRelogin(providerID, accountID, true)
+		log.Printf("[TRAE] %s/%s 凭据失效（1001），标记需重登", providerID, accountID)
+	}
+}
