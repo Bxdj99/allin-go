@@ -4,8 +4,6 @@ import (
 	"context"
 	"net/http"
 	"time"
-
-	"allin/internal/config"
 )
 
 // Token 保活：把所有带 refresh 的账号立刻续期一遍。
@@ -27,13 +25,27 @@ type keepaliveResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// credUpdate 是一次续期拿到的凭据变化，只含三个字段。
+type credUpdate struct {
+	provider string
+	account  string
+	access   string
+	refresh  string
+	expires  int64
+}
+
 // keepaliveAll 对所有（或指定供应商的）带 refresh 账号做一次续期。
 //
 // 调用方需自行持有 refreshMu，避免与自动续期打架。
-func (s *Server) keepaliveAll(ctx context.Context, wantPID string) (cfg *config.Config, results []keepaliveResult, okN, skipN, failN int, changed bool) {
-	cfg = s.store.Snapshot()
+//
+// 为什么不在循环里直接改 cfg 再 Save：保活可能跑几分钟，
+// 期间用户完全可能改了别的设置（保底、路由……）。
+// 如果最后 Save(整份 cfg)，就会把期间的所有改动覆盖掉。
+// 所以这里只收集「凭据变化」，落盘时用 mergeCredentials 合并到最新配置上。
+func (s *Server) keepaliveAll(ctx context.Context, wantPID string) (results []keepaliveResult, okN, skipN, failN int, updates []credUpdate) {
+	cfg := s.store.Snapshot()
 	if cfg == nil {
-		return nil, nil, 0, 0, 0, false
+		return nil, 0, 0, 0, nil
 	}
 
 	for _, p := range cfg.Providers {
@@ -57,15 +69,26 @@ func (s *Server) keepaliveAll(ctx context.Context, wantPID string) (cfg *config.
 				continue
 			}
 
+			// 记下续期前的凭据，用于判断是否真的变了
+			oldAccess, oldRefresh, oldExpires := a.Access, a.Refresh, a.Expires
+
 			err := s.refreshOne(ctx, p, a)
 			switch {
 			case err == nil:
 				row.OK = true
-				changed = true
 				okN++
 				// 续期成功顺手清掉「需重登」标记，否则账号永远被跳过
 				if s.pool.NeedRelogin(p.ID, a.ID) {
 					s.pool.MarkNeedRelogin(p.ID, a.ID, false)
+				}
+				if a.Access != oldAccess || a.Refresh != oldRefresh || a.Expires != oldExpires {
+					updates = append(updates, credUpdate{
+						provider: p.ID,
+						account:  a.ID,
+						access:   a.Access,
+						refresh:  a.Refresh,
+						expires:  a.Expires,
+					})
 				}
 			case isSkipRefresh(err):
 				row.Skipped = "该供应商不支持自动刷新"
@@ -79,7 +102,42 @@ func (s *Server) keepaliveAll(ctx context.Context, wantPID string) (cfg *config.
 			time.Sleep(600 * time.Millisecond)
 		}
 	}
-	return cfg, results, okN, skipN, failN, changed
+	return results, okN, skipN, failN, updates
+}
+
+// mergeCredentials 把续期拿到的凭据合并进**最新**配置并落盘。
+//
+// 只改 access / refresh / expires 三个字段，其它一律以最新配置为准。
+// 这样即使保活期间用户改了保底、路由、面板设置，也不会被覆盖。
+func (s *Server) mergeCredentials(updates []credUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	fresh := s.store.Snapshot()
+	if fresh == nil {
+		return nil
+	}
+	applied := 0
+	for _, u := range updates {
+		p := fresh.FindProvider(u.provider)
+		if p == nil {
+			continue
+		}
+		for _, a := range p.Accounts {
+			if a == nil || a.ID != u.account {
+				continue
+			}
+			a.Access = u.access
+			a.Refresh = u.refresh
+			a.Expires = u.expires
+			applied++
+			break
+		}
+	}
+	if applied == 0 {
+		return nil
+	}
+	return s.store.Save(fresh)
 }
 
 // isSkipRefresh 判断错误是否属于「该供应商不支持续期」。
@@ -109,15 +167,13 @@ func (s *Server) handleTokenKeepalive(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
 
-	cfg, results, okN, skipN, failN, changed := s.keepaliveAll(ctx, r.URL.Query().Get("provider"))
+	results, okN, skipN, failN, updates := s.keepaliveAll(ctx, r.URL.Query().Get("provider"))
 
-	if changed && cfg != nil {
-		if err := s.store.Save(cfg); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{
-				"ok": false, "error": "续期成功但保存失败: " + err.Error(), "results": results,
-			})
-			return
-		}
+	if err := s.mergeCredentials(updates); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"ok": false, "error": "续期成功但保存失败: " + err.Error(), "results": results,
+		})
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

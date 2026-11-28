@@ -108,11 +108,10 @@ func (s *Server) maybeDailyKeepalive(ctx context.Context, lastSlot *string) bool
 	defer cancel()
 
 	log.Printf("每日 Token 保活开始（%s 点档）", slot)
-	cfg2, _, okN, skipN, failN, changed := s.keepaliveAll(kctx, "")
-	if changed && cfg2 != nil {
-		if err := s.store.Save(cfg2); err != nil {
-			log.Printf("每日保活结果保存失败: %v", err)
-		}
+	_, okN, skipN, failN, updates := s.keepaliveAll(kctx, "")
+	// 只合并凭据字段，不覆盖保活期间用户改的其它配置
+	if err := s.mergeCredentials(updates); err != nil {
+		log.Printf("每日保活结果保存失败: %v", err)
 	}
 	log.Printf("每日 Token 保活完成：成功 %d / 跳过 %d / 失败 %d", okN, skipN, failN)
 	return true
