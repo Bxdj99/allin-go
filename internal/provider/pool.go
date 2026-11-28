@@ -33,6 +33,14 @@ type acctState struct {
 	// 否则用户只会看到「冷却中」，以为是临时限流。
 	needRelogin bool
 
+	// creditsSupported 表示「这个供应商本身能不能查余额」。
+	//
+	// 只有 WorkBuddy 系有积分接口；trae / copilot / 网页版等一律查不到。
+	// 区分这件事很关键：余额未知在支持查询的供应商那里是「暂时没查到」，
+	// 在不支持的供应商那里是「压根没有这个概念」——
+	// 后者绝不能被保底判定拦下，否则那些家永远派不出活。
+	creditsSupported bool
+
 	// 积分快照：由后台刷新任务灌入，Pick 只读，绝不在此触发网络请求。
 	creditsAt   time.Time // 快照时间，零值表示从未刷新过
 	remaining   float64   // 当前可用余额
@@ -152,6 +160,11 @@ func (p *Pool) accountBelowReserve(st *acctState, now time.Time) bool {
 		return false
 	}
 	if p.creditUnknown(st, now) {
+		// 供应商不支持查余额 → 未知不等于没额度，不算「低于保底」。
+		// 否则 trae / copilot / 网页版这类在严格模式下永远派不出活。
+		if !st.creditsSupported {
+			return false
+		}
 		return p.reserveIsStrict()
 	}
 	// 与 shouldSwitchAway 保持一致：<= 门槛就算不足。
@@ -166,14 +179,26 @@ func (p *Pool) creditUnknown(st *acctState, now time.Time) bool {
 // shouldSwitchAway 判断选号时是否应该跳过这个账号。
 //
 // 保底关闭时只挡「余额见底」（CreditsFloor=1）：连 1 分都没有的号派了也白派。
-// 保底开启且严格模式时，余额未知同样跳过 —— 宁可不派，也不拿未知余额的号去烧。
-// 非严格模式保持旧行为：未知就放行，避免用户看到「全部不可用」。
+//
+// 余额未知的处理是这里最容易搞错的地方：
+// 只有 WorkBuddy 系（workbuddy / workbuddy-ai）有积分查询接口，
+// 其它供应商（trae、copilot、deepseek 网页版……）的余额永远是「未知」。
+// 早先严格模式下「未知就跳过」，结果这些家一旦用户开了保底严格模式
+// 就全部永久派不出去，报「所有账号的积分都已低于保底」，
+// 但它们**根本没有积分这个概念**，上游明明是能用的。
+//
+// 正解：余额未知且该供应商压根不支持查余额 → 放行，让上游自己说话；
+// 只有「这个供应商本来能查、但这轮还没查到」才在严格模式下谨慎跳过。
 func (p *Pool) shouldSwitchAway(st *acctState, now time.Time) bool {
 	if st == nil {
 		return false
 	}
 	if p.creditUnknown(st, now) {
-		// 余额未知。严格模式拦，非严格模式放行。
+		// 供应商不支持查余额：未知不代表没额度，直接放行。
+		if !st.creditsSupported {
+			return false
+		}
+		// 支持查但本轮还没查到：严格模式宁可不动，非严格放行。
 		return p.reserveActive() && p.reserveIsStrict()
 	}
 	// 用 <= 而不是 <：用户明确要求「到 5 及以下就换号，别烧到 0」。
@@ -533,7 +558,9 @@ func (p *Pool) pickRanked(prov *config.Provider, exclude map[string]bool, mode s
 			}
 			continue
 		}
-		if st != nil && p.creditUnknown(st, now) && p.reserveActive() && p.reserveIsStrict() {
+		// 余额未知 + 严格模式才剔除；但供应商本身不支持查余额时不能剔，
+		// 那种「未知」是永久状态，剔掉等于永不起用。
+		if st != nil && p.creditUnknown(st, now) && st.creditsSupported && p.reserveActive() && p.reserveIsStrict() {
 			continue
 		}
 		if best == nil {
@@ -621,6 +648,8 @@ func (p *Pool) SetCreditsFull(pid, aid string, remaining, total float64, resetAt
 	st.creditTotal = total
 	st.resetAt = resetAt
 	st.creditsAt = time.Now()
+	// 能写进来就说明这家支持查询余额
+	st.creditsSupported = true
 }
 
 // Success 记录一次成功。

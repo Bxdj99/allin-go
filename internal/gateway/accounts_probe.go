@@ -130,7 +130,28 @@ func (s *Server) handleAccountsProbe(w http.ResponseWriter, r *http.Request) {
 					s.pool.MarkNeedRelogin(j.pid, j.acc.ID, false)
 				}
 			default:
-				// 其它供应商暂只判断「有没有凭据」，不做网络探测
+				// 其它供应商不做网络探测，但也不能一律报「健康」。
+				//
+				// 这正是用户反馈里那句「trae 后台账号显示健康，对话出不来」的来源：
+				// 以前这里无条件 ok，token 早就过期了也显示绿的。
+				// 现在至少用本地 expires 判一次过期 —— 不花一个请求，
+				// 但能立刻告诉用户「该续期/该重新登录了」。
+				if strings.TrimSpace(j.acc.Key()) == "" {
+					rows[idx].Status = "relogin"
+					rows[idx].Detail = "没有凭据，需要重新登录"
+					break
+				}
+				if exp := j.acc.Expires; exp > 0 && time.Now().UnixMilli() >= exp {
+					// 过期了：能续期就提示续期，不能续期才要求重登
+					if strings.TrimSpace(j.acc.Refresh) != "" {
+						rows[idx].Status = "error"
+						rows[idx].Detail = "凭据已过期（有 refresh token，可点「Token 保活」续期）"
+					} else {
+						rows[idx].Status = "relogin"
+						rows[idx].Detail = "凭据已过期且没有 refresh token，需要重新登录"
+					}
+					break
+				}
 				rows[idx].Status = "ok"
 				rows[idx].Detail = "有凭据（未做网络探测）"
 			}
@@ -151,13 +172,13 @@ func (s *Server) handleAccountsProbe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":      true,
-		"rows":    rows,
-		"total":   len(rows),
-		"usable":  okCount,
-		"relogin": reloginCount,
+		"ok":       true,
+		"rows":     rows,
+		"total":    len(rows),
+		"usable":   okCount,
+		"relogin":  reloginCount,
 		"noCredit": noCreditCount,
-		"note":    "relogin 表示凭据已被上游判失效，需要重新登录；no-credit 表示额度用尽",
+		"note":     "relogin 表示凭据已被上游判失效，需要重新登录；no-credit 表示额度用尽",
 	})
 }
 

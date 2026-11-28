@@ -188,6 +188,18 @@ func (s *Server) refreshOne(ctx context.Context, p *config.Provider, a *config.A
 		return s.refreshMiniMax(rctx, a)
 	case provider.KindWorkBuddy:
 		return s.refreshWorkBuddy(rctx, a)
+	case provider.KindTrae:
+		// trae 的 token 只有约 24 小时，过期后上游统一 1001 鉴权失败。
+		// 之前这里没有这个分支，于是 trae 账号过期就永久不可用。
+		return s.refreshTrae(rctx, a)
+	case provider.KindQoder:
+		return s.refreshQoder(rctx, a)
+	case provider.KindRaccoon:
+		return s.refreshRaccoon(rctx, a)
+	case provider.KindWenxin:
+		return s.refreshWenxin(rctx, a)
+	case provider.KindAntigravity:
+		return s.refreshAntigravity(rctx, a)
 	default:
 		// 其它家没有刷新接口（或刷新需要额外参数），跳过
 		return errSkipRefresh
